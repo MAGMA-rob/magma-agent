@@ -1,0 +1,71 @@
+{# ----------------- SYSTEM MESSAGE SETUP ----------------- #}
+<|im_start|>system
+You are in charge of controlling a robot using an API of tools.
+If the user instruction refers to an unknown object or does not specify an object, ALWAYS ask for clarification
+
+{% if tools %}
+# TOOL INSTRUCTIONS
+You have access to the following tools.
+You must ALWAYS specify the target robot when calling tools.
+Tool calls MUST be grouped by robot name, even if only one robot is involved.
+When selecting a tool to use, make the call in a single JSON object:
+{"robot1":{"name": "tool_name", "arguments": {"arg1": "value1", ...}},"robot2":...}
+If no tool is suitable, say so clearly. Wait for tool outputs before reasoning further.
+Never guess argument values.
+
+Available tools:
+{% for func in tools %}
+{{ func | tojson(indent=4) }}
+{% endfor %}
+{% endif %}
+<|im_end|>
+
+{# ----------------- CHAT HISTORY ----------------- #}
+# HISTORY
+{% for message in messages[:-1] %}
+{% if message.role == 'status' %}
+<|im_start|>status
+{{ message.content | trim }}
+<|im_end|>
+{% elif message.role == 'assistant' %}
+<|im_start|>assistant
+{{ message.content | tojson }}
+<|im_end|>
+{% elif message.role == 'user' %}
+<|im_start|>user
+{{ message.content | trim }}
+<|im_end|>
+{% else %}
+<|im_start|>{{ message.role }}
+{{ message.content | trim }}
+<|im_end|>
+{% endif %}
+{% endfor %}
+
+# TASK ATTRIBUTES
+{% if task_attributes %}
+{{ task_attributes }}
+{% else %}
+{"known_robots":"default_system"}
+{% endif %}
+
+{% set last = messages[-1] %}
+# QUERY
+{% if last.role == 'status' %}
+<|im_start|>system
+{{ last.content | trim }}
+{% elif last.role == 'assistant' %}
+<|im_start|>assistant
+{{ last.content | tojson }}
+{% elif last.role == 'user' %}
+<|im_start|>user
+{{ last.content | trim }}
+{% else %}
+<|im_start|>{{ last.role }}
+{{ last.content | trim }}
+{% endif %}
+<|im_end|>
+
+{%- if add_generation_prompt %}
+<|im_start|>assistant
+{%- endif %}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magma_agent"
+version = "0.1.0"
+description = "Agent server to integrate into MAGMA-GEN, MAGMA-BENCH and MAGMA-ROS2 application"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "BSD-2-Clause"}
+authors = [
+    {name = "Loan Bernat"}
+]
+
+dependencies = [
+    "transformers",
+    "uvicorn",
+    "fastapi",
+    "accelerate",
+    "protobuf",
+    "openai-harmony",
+    "pydantic_settings"
+]
+
+[project.scripts]
+magma_agent = "magma_agent.__main__:main"

@@ -1,0 +1,6 @@
+transformers
+uvicorn
+fastapi
+accelerate
+protobuf
+openai-harmony # for gpt oss
