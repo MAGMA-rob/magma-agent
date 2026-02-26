@@ -15,11 +15,9 @@ This repository contains a python package to run a fastapi/uvicorn server in pyt
 
 You can use this package to define your own agents script or simply to use an already supported model.
 
-
-
 ## Use this package with your own model
 
-1. Create a new class for your model which inherits from BaseCommander
+Check documentation
 
 
 ## Support
