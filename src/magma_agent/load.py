@@ -1,7 +1,7 @@
 from typing import Optional
 
-from .models.commander import MagmaCommander, SmolLMCommander, QwenCommander
-from .models.memorizer import MagmaMemorizer
+from .clients.commander import MagmaCommander, SmolLMCommander, QwenCommander
+from .clients.memorizer import MagmaMemorizer
 
 def load_commander(commander_id : str, optimize_memory : bool, commander_output : str, chat_template : Optional[str]=None):
     if commander_id != "none":
