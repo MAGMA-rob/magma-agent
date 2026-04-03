@@ -15,8 +15,22 @@ class Memorizer(ABC):
         else:
             self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side='left')
 
-        self.model = AutoModelForCausalLM.from_pretrained(model_id, device_map="cpu" if cpu_load else "cuda")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            low_cpu_mem_usage=True,
+        )
         self.model.eval()
+        self._current_device = "cpu"
+        self.set_device("cpu" if cpu_load else "cuda")
+
+    def set_device(self, device: str) -> None:
+        if self._current_device == device:
+            return
+        self.model.to(device)
+        self._current_device = device
+
+    def offload(self) -> None:
+        self.set_device("cpu")
 
     @abstractmethod
     def process_batched_entry(self, message : BatchedMessageMemorizer, inference_mode : bool) -> List[Dict]:

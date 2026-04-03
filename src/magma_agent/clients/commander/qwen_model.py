@@ -61,8 +61,8 @@ Rules (mandatory):
 
 class QwenCommander(BaseCommander):
 
-    def __init__(self, model_name : str) -> None:
-        super().__init__(model_name,cpu_load=False)
+    def __init__(self, model_name : str, cpu_load: bool = False) -> None:
+        super().__init__(model_name, cpu_load=cpu_load)
 
     def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
         system_message = {'role': "system", "content":BASE_SYSTEM_PROMPT}
@@ -78,7 +78,7 @@ class QwenCommander(BaseCommander):
             else:
                 mem_str += "empty\n"
 
-            prompt_user = f"Task Attributes : {message.attributes[i]}.\n{mem_str}\nQuery : {message.instruction}"
+            prompt_user = f"Task Attributes : {message.attributes[i]}.\n{mem_str}\nQuery : {message.instruction[i]}"
 
             messages = [
                 system_message.copy()
