@@ -7,7 +7,7 @@ class MessageCommander(BaseModel):
     history : List
     function: List
     instruction: str
-    instruction_role: str = "user"
+    instruction_role: str = "USER"
     inference_mode : bool = False
     prediction_mode : str = "tool_select" #Could be tool_select or sequence
 

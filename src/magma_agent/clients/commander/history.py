@@ -19,7 +19,7 @@ def get_history_content(message: Dict[str, Any]) -> str:
 def get_instruction_roles(message: BatchedMessageCommander) -> List[str]:
     roles = getattr(message, "instruction_role", [])
     if not roles:
-        return ["user"] * len(message.instruction)
+        return ["USER"] * len(message.instruction)
     if len(roles) != len(message.instruction):
         raise ValueError(
             "instruction_role must have the same length as instruction in BatchedMessageCommander"
@@ -32,10 +32,10 @@ def map_chat_role(
     system_role: str = "system",
     model_role: str = "assistant",
 ) -> str:
-    if author in ("model", "assistant"):
+    if author in ("MODEL", "model", "assistant"):
         return model_role
-    if author in ("system", "status"):
+    if author in ("SYSTEM", "system", "status"):
         return system_role
-    if author in (None, ""):
+    if author in (None, "", "USER", "user"):
         return "user"
     return str(author)
