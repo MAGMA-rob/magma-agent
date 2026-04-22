@@ -4,6 +4,7 @@ import json, os, re
 
 from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
+from .history import get_history_content, get_instruction_roles, map_chat_role
 
 class MagmaCommander(BaseCommander):
 
@@ -23,6 +24,7 @@ class MagmaCommander(BaseCommander):
  
         mx_lenght = 0
         formatted_inputs = []
+        instruction_roles = get_instruction_roles(message)
 
         for i in range(len(message.memory)):
             memory = "Memory:\n" 
@@ -32,9 +34,23 @@ class MagmaCommander(BaseCommander):
             messages= []
 
             for previous_mess in message.history[i]:
-                messages.append({"role" : previous_mess.get("author", "user"), "content": previous_mess.get("sentence", "")})
+                messages.append({
+                    "role": map_chat_role(
+                        previous_mess.get("author"),
+                        system_role="status",
+                        model_role="model",
+                    ),
+                    "content": get_history_content(previous_mess),
+                })
 
-            messages.append({"role": "user", "content": message.instruction[i]})
+            messages.append({
+                "role": map_chat_role(
+                    instruction_roles[i],
+                    system_role="status",
+                    model_role="model",
+                ),
+                "content": message.instruction[i],
+            })
             
             formatted_inputs.append(self.tokenizer.apply_chat_template(
                     messages,

@@ -4,6 +4,7 @@ import json, os, re
 
 from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
+from .history import get_history_content, get_instruction_roles, map_chat_role
 
 BASE_SYSTEM_PROMPT = """You are a COMMANDER agent controlling a robot through optional tool calls.
 You operate in a long-horizon task, but you do NOT manage persistent memory yourself.
@@ -68,6 +69,7 @@ class QwenCommander(BaseCommander):
         system_message = {'role': "system", "content":BASE_SYSTEM_PROMPT}
         formatted_inputs = []
         mx_lenght = 0
+        instruction_roles = get_instruction_roles(message)
 
         for i in range(len(message.instruction)):
             
@@ -84,9 +86,15 @@ class QwenCommander(BaseCommander):
                 system_message.copy()
             ]
             for previous_mess in message.history[i]:
-                messages.append({"role" : previous_mess.get("author", "user"), "content": previous_mess.get("sentence", "")})
+                messages.append({
+                    "role": map_chat_role(previous_mess.get("author")),
+                    "content": get_history_content(previous_mess),
+                })
 
-            messages.append({"role":"user","content":prompt_user})
+            messages.append({
+                "role": map_chat_role(instruction_roles[i]),
+                "content": prompt_user,
+            })
 
             formatted_inputs.append(self.tokenizer.apply_chat_template(
                     messages,

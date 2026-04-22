@@ -81,6 +81,7 @@ def create_app(settings: Settings) -> FastAPI:
                         history=[message.history],
                         function=[message.function],
                         instruction=[message.instruction],
+                        instruction_role=[message.instruction_role],
                         prediction_mode = message.prediction_mode
                     )
                     out = commander.process_batched_entry(message, inf_mode)[0]
