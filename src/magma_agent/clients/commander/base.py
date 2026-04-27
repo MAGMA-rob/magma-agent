@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from transformers import AutoTokenizer, AutoModelForCausalLM #type: ignore
 import torch #type: ignore
-from typing import List, Dict
+from typing import Any, List, Dict
 
 from magma_agent.messages import BatchedMessageCommander
 
@@ -10,13 +10,15 @@ class BaseCommander(ABC):
     tokenizer : AutoTokenizer
     model : AutoModelForCausalLM
 
-    def __init__(self, model_id : str, cpu_load : bool):
+    def __init__(self, model_id : str, cpu_load : bool, dtype: Any = torch.float16):
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            dtype=torch.float16,
+            dtype=dtype,
             low_cpu_mem_usage=True,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side='left')
+        if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model.eval()
         self._current_device = "cpu"
         self.set_device("cpu" if cpu_load else "cuda")

@@ -1,16 +1,20 @@
 from typing import Optional
 
-from .clients.commander import MagmaCommander, SmolLMCommander, QwenCommander
+from .clients.commander import MagmaCommander, SmolLMCommander, QwenCommander, OSSCommander
 from .clients.memorizer import MagmaMemorizer
 
 def load_commander(commander_id : str, optimize_memory : bool, commander_output : str, chat_template : Optional[str]=None):
     if commander_id != "none":
-        if "original-qwen" in commander_id:
+        normalized_commander_id = commander_id.lower()
+        if "original-qwen" in normalized_commander_id:
             print(f"[MAGMA AGENT] Loading QWEN Commander Model : qwen3-{commander_id}")
             return QwenCommander(commander_id, cpu_load=optimize_memory)
-        elif "original-smollm" in commander_id:
+        elif "original-smollm" in normalized_commander_id:
             print("[MAGMA AGENT] Loading SmolLM3")
             return SmolLMCommander(commander_id, optimize_memory)
+        elif "gpt-oss" in normalized_commander_id or "gpt_oss" in normalized_commander_id:
+            print(f"[MAGMA AGENT] Loading GPT OSS Commander Model : {commander_id}")
+            return OSSCommander(commander_id, cpu_load=optimize_memory)
         else:
             print(f"[MAGMA AGENT] Loading Commander Model : {commander_id} with output format {commander_output}")
             return MagmaCommander(cpu_load=optimize_memory, model_id=commander_id, output_style=commander_output, overriding_chat_template_path=chat_template)
