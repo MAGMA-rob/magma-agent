@@ -42,7 +42,6 @@ def create_app(settings: Settings) -> FastAPI:
                     settings.commander_chat_template,
                     qwen_options={
                         "quantization_mode": settings.qwen_quantization,
-                        "max_batch_size": settings.qwen_max_batch_size,
                         "max_new_tokens": settings.qwen_max_new_tokens,
                         "attn_implementation": settings.qwen_attn_implementation,
                         "use_cache": settings.qwen_use_cache,
