@@ -117,7 +117,7 @@ class SmolLMCommander(BaseCommander):
             if mx_lenght < lenght:
                 mx_lenght = lenght
 
-        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding="max_length", max_length=mx_lenght).to(self.model.device)
+        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding="max_length", max_length=mx_lenght).to(self.input_device)
         input_lengths = [len(x) for x in inputs["input_ids"]]
         with torch.no_grad():
             if inference_mode:

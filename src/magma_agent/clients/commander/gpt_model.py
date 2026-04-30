@@ -203,8 +203,8 @@ class OSSCommander(BaseCommander):
             attention_mask.append([0] * pad_length + [1] * len(ids))
 
         return {
-            "input_ids": torch.tensor(input_ids, dtype=torch.long, device=self.model.device),
-            "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=self.model.device),
+            "input_ids": torch.tensor(input_ids, dtype=torch.long, device=self.input_device),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=self.input_device),
         }
 
     def _pad_token_id(self) -> int:

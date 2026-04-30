@@ -8,6 +8,13 @@ class Settings(BaseSettings):
     commander_output_style: str = "qwen_format"
     commander_chat_template: Optional[str] = None
     optimize_memory: bool = False
+    qwen_quantization: str = "4bit"
+    qwen_max_batch_size: int = 1
+    qwen_max_new_tokens: int = 1500
+    qwen_attn_implementation: Optional[str] = "sdpa"
+    qwen_use_cache: bool = True
+    qwen_device_map: str = "cuda"
+    qwen_gpu_memory_limit: Optional[str] = None
     log_file: str = "server.log"
     host: str = "0.0.0.0"
     port: int = 8888

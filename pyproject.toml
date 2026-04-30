@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn",
     "fastapi",
     "accelerate",
+    "bitsandbytes",
     "protobuf",
     "openai-harmony",
     "pydantic_settings"

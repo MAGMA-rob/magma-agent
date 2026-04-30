@@ -38,7 +38,15 @@ docker run --rm \
     -e COMMANDER_ID="${COMMANDER_ID}" \
     -e MEMORIZER_ID="${MEMORIZER_ID}" \
     -e COMMANDER_OUTPUT_STYLE="${OUTPUT_STYLE}" \
-    -e CONTAINER_NAME="instance_${GPU_ID}.log"\
+    -e QWEN_QUANTIZATION="${QWEN_QUANTIZATION:-4bit}" \
+    -e QWEN_MAX_BATCH_SIZE="${QWEN_MAX_BATCH_SIZE:-1}" \
+    -e QWEN_MAX_NEW_TOKENS="${QWEN_MAX_NEW_TOKENS:-1500}" \
+    -e QWEN_ATTN_IMPLEMENTATION="${QWEN_ATTN_IMPLEMENTATION:-sdpa}" \
+    -e QWEN_USE_CACHE="${QWEN_USE_CACHE:-true}" \
+    -e QWEN_DEVICE_MAP="${QWEN_DEVICE_MAP:-cuda}" \
+    -e QWEN_GPU_MEMORY_LIMIT="${QWEN_GPU_MEMORY_LIMIT:-}" \
+    -e PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" \
+    -e CONTAINER_NAME="instance_${GPU_ID}.log" \
     -p ${PORT}:8888 \
     -v "$(pwd)/models:/app/models" \
     -v "$(pwd)/logs:/app/logs" \

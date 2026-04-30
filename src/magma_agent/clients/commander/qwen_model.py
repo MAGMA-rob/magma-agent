@@ -1,6 +1,6 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import torch
-import json, os, re
+import json, re
 
 from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
@@ -122,22 +122,71 @@ INPUTS
 
 class QwenCommander(BaseCommander):
 
-    def __init__(self, model_name : str, cpu_load: bool = False) -> None:
-        quantization = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
+    def __init__(
+        self,
+        model_name : str,
+        cpu_load: bool = False,
+        quantization_mode: str = "4bit",
+        max_batch_size: int = 1,
+        max_new_tokens: int = 1500,
+        attn_implementation: Optional[str] = "sdpa",
+        use_cache: bool = True,
+        device_map: str = "cuda",
+        gpu_memory_limit: Optional[str] = None,
+    ) -> None:
+        self.max_batch_size = max(1, int(max_batch_size))
+        self.max_new_tokens = max(1, int(max_new_tokens))
+        self.use_cache = use_cache
+
+        compute_dtype = _best_compute_dtype()
+        quantization = _build_quantization_config(quantization_mode, compute_dtype)
+        load_kwargs = _build_load_kwargs(
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+            gpu_memory_limit=gpu_memory_limit,
+        )
+
+        print(
+            "[QWEN] Loading with "
+            f"quantization={quantization_mode}, compute_dtype={compute_dtype}, "
+            f"max_batch_size={self.max_batch_size}, max_new_tokens={self.max_new_tokens}, "
+            f"use_cache={self.use_cache}, load_kwargs={load_kwargs}"
+        )
+        super().__init__(
+            model_name,
+            cpu_load=False,
+            dtype=compute_dtype,
+            quantization=quantization,
+            load_kwargs=load_kwargs,
+            runtime_device_move=False,
+        )
+        if cpu_load:
+            print(
+                "[QWEN] optimize_memory CPU offload is disabled for quantized/device-mapped Qwen. "
+                "Use QWEN_MAX_BATCH_SIZE/QWEN_MAX_NEW_TOKENS to reduce runtime memory."
             )
-        super().__init__(model_name, cpu_load=False, quantization= quantization)
 
     def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
+        batch_size = len(message.instruction)
+        if batch_size > self.max_batch_size:
+            responses: List[Dict] = []
+            for start in range(0, batch_size, self.max_batch_size):
+                chunk = _slice_batched_message(message, start, start + self.max_batch_size)
+                responses.extend(self._process_batched_chunk(chunk, inference_mode))
+                _clear_cuda_cache()
+            return responses
+
+        return self._process_batched_chunk(message, inference_mode)
+
+    def _process_batched_chunk(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
         system_message = {'role': "system", "content":BASE_SYSTEM_PROMPT}
         formatted_inputs = []
-        mx_lenght = 0
         instruction_roles = get_instruction_roles(message)
+        batch_size = len(message.instruction)
 
-        for i in range(len(message.instruction)):
+        _validate_batch(message)
+
+        for i in range(batch_size):
             
             mem_str = "Memory:\n"
             if len(message.memory[i]) > 0:
@@ -170,36 +219,123 @@ class QwenCommander(BaseCommander):
                 )
             )
 
-            lenght = len(self.tokenizer(formatted_inputs[i], return_tensors="pt")["input_ids"][0])
+        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.input_device)
+        prompt_length = inputs["input_ids"].shape[1]
+        generation_kwargs: Dict[str, Any] = {
+            **inputs,
+            "max_new_tokens": self.max_new_tokens,
+            "use_cache": self.use_cache,
+            "pad_token_id": self.tokenizer.pad_token_id,
+        }
+        if self.tokenizer.eos_token_id is not None:
+            generation_kwargs["eos_token_id"] = self.tokenizer.eos_token_id
 
-            if mx_lenght < lenght:
-                mx_lenght = lenght
-
-        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding="max_length", max_length=mx_lenght).to(self.model.device)
-        input_lengths = [len(x) for x in inputs["input_ids"]]
-        with torch.no_grad():
+        with torch.inference_mode():
             if inference_mode:
                 output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=1500,
+                    **generation_kwargs,
                     do_sample=False,  
                 )
             else:
                 output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=1500,
+                    **generation_kwargs,
+                    do_sample=True,
                     temperature=0.6,
                     top_p=0.95,
                     top_k=20
                 )
         responses = []
         for i in range(len(formatted_inputs)):
-            generated_tokens = output[i][input_lengths[i]:]
+            generated_tokens = output[i][prompt_length:]
             response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
             st = parse_blocks(response_text)
             responses.append(st)
 
         return responses
+
+
+def _best_compute_dtype() -> torch.dtype:
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+def _build_quantization_config(quantization_mode: str, compute_dtype: torch.dtype):
+    mode = (quantization_mode or "4bit").lower()
+    if mode in ("4bit", "4-bit", "nf4"):
+        return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=compute_dtype,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+    if mode in ("8bit", "8-bit", "int8"):
+        return BitsAndBytesConfig(load_in_8bit=True)
+    if mode in ("none", "no", "false", "0"):
+        return None
+    raise ValueError("qwen_quantization must be one of: 4bit, 8bit, none")
+
+
+def _build_load_kwargs(
+    attn_implementation: Optional[str],
+    device_map: str,
+    gpu_memory_limit: Optional[str],
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {}
+    if attn_implementation:
+        kwargs["attn_implementation"] = attn_implementation
+
+    normalized_device_map = (device_map or "cuda").lower()
+    if normalized_device_map == "auto":
+        kwargs["device_map"] = "auto"
+    elif normalized_device_map == "cpu":
+        kwargs["device_map"] = {"": "cpu"}
+    elif normalized_device_map == "cuda":
+        if torch.cuda.is_available():
+            kwargs["device_map"] = {"": torch.cuda.current_device()}
+        else:
+            kwargs["device_map"] = {"": "cpu"}
+    else:
+        raise ValueError("qwen_device_map must be one of: cuda, auto, cpu")
+
+    if gpu_memory_limit and torch.cuda.is_available():
+        kwargs["max_memory"] = {torch.cuda.current_device(): gpu_memory_limit}
+
+    return kwargs
+
+
+def _slice_batched_message(message: BatchedMessageCommander, start: int, end: int) -> BatchedMessageCommander:
+    instruction_roles = get_instruction_roles(message)
+    return BatchedMessageCommander(
+        memory=message.memory[start:end],
+        attributes=message.attributes[start:end],
+        history=message.history[start:end],
+        function=message.function[start:end],
+        instruction=message.instruction[start:end],
+        instruction_role=instruction_roles[start:end],
+        prediction_mode=message.prediction_mode,
+    )
+
+
+def _validate_batch(message: BatchedMessageCommander) -> None:
+    batch_size = len(message.instruction)
+    if not batch_size:
+        raise ValueError("BatchedMessageCommander must contain at least one instruction.")
+
+    for field_name in ("memory", "attributes", "history", "function"):
+        field_value = getattr(message, field_name)
+        if len(field_value) != batch_size:
+            raise ValueError(
+                f"{field_name} must have the same length as instruction "
+                f"({len(field_value)} != {batch_size})."
+            )
+
+
+def _clear_cuda_cache() -> None:
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
 
 THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 INTENT_RE = re.compile(r"<intent>\s*(.*?)\s*</intent>", re.DOTALL)

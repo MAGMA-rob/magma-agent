@@ -82,7 +82,7 @@ class MagmaCommander(BaseCommander):
             if mx_lenght < lenght:
                 mx_lenght = lenght
 
-        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.model.device)
+        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.input_device)
         if os.getenv("MAGMA_DEBUG_TOKENIZER") == "1":
             print("[COMMANDER][BATCH TOKENIZER DEBUG]")
             print(f"batch_input_ids_shape={tuple(inputs['input_ids'].shape)}")

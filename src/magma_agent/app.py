@@ -35,7 +35,21 @@ def create_app(settings: Settings) -> FastAPI:
 
         try:
             if settings.commander_id:
-                app.state.commander = load_commander(settings.commander_id, settings.optimize_memory, settings.commander_output_style, settings.commander_chat_template)
+                app.state.commander = load_commander(
+                    settings.commander_id,
+                    settings.optimize_memory,
+                    settings.commander_output_style,
+                    settings.commander_chat_template,
+                    qwen_options={
+                        "quantization_mode": settings.qwen_quantization,
+                        "max_batch_size": settings.qwen_max_batch_size,
+                        "max_new_tokens": settings.qwen_max_new_tokens,
+                        "attn_implementation": settings.qwen_attn_implementation,
+                        "use_cache": settings.qwen_use_cache,
+                        "device_map": settings.qwen_device_map,
+                        "gpu_memory_limit": settings.qwen_gpu_memory_limit,
+                    },
+                )
 
             if settings.memorizer_id:
                 app.state.memorizer = load_memorizer(settings.memorizer_id, settings.optimize_memory)
