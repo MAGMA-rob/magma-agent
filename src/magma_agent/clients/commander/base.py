@@ -7,11 +7,6 @@ from typing import Any, List, Dict, Optional
 from magma_agent.messages import BatchedMessageCommander
 
 
-def _transformers_dtype_key() -> str:
-    major = (getattr(transformers, "__version__", "0").split(".", 1)[0] or "0")
-    return "dtype" if major.isdigit() and int(major) >= 5 else "torch_dtype"
-
-
 class BaseCommander(ABC):
 
     tokenizer : AutoTokenizer
@@ -27,10 +22,12 @@ class BaseCommander(ABC):
         runtime_device_move: bool = True,
     ):
         model_kwargs = {
-            _transformers_dtype_key(): dtype,
-            "quantization_config": quantization,
+            "dtype": dtype,
             "low_cpu_mem_usage": True,
         }
+        if quantization:
+            model_kwargs["quantization_config"] = quantization
+
         if load_kwargs:
             model_kwargs.update(load_kwargs)
 
