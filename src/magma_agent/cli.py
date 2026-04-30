@@ -12,7 +12,6 @@ def main():
     parser.add_argument("--memorizer-id")
     parser.add_argument("--optimize-memory", action="store_true")
     parser.add_argument("--qwen-quantization", choices=("4bit", "8bit", "none"))
-    parser.add_argument("--qwen-max-batch-size", type=int)
     parser.add_argument("--qwen-max-new-tokens", type=int)
     parser.add_argument("--qwen-attn-implementation")
     parser.add_argument("--qwen-use-cache", action=argparse.BooleanOptionalAction, default=None)

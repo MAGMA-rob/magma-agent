@@ -128,7 +128,6 @@ class QwenCommander(BaseCommander):
         model_name : str,
         cpu_load: bool = False,
         quantization_mode: str = "4bit",
-        max_batch_size: int = 1,
         max_new_tokens: int = 1500,
         attn_implementation: Optional[str] = "sdpa",
         use_cache: bool = True,
@@ -137,7 +136,6 @@ class QwenCommander(BaseCommander):
         allow_cpu_offload: bool = False,
         offload_folder: str = "/tmp/magma_agent_qwen_offload",
     ) -> None:
-        self.max_batch_size = max(1, int(max_batch_size))
         self.max_new_tokens = max(1, int(max_new_tokens))
         self.use_cache = use_cache
 
@@ -157,7 +155,7 @@ class QwenCommander(BaseCommander):
         print(
             "[QWEN] Loading with "
             f"quantization={quantization_mode}, compute_dtype={compute_dtype}, "
-            f"max_batch_size={self.max_batch_size}, max_new_tokens={self.max_new_tokens}, "
+            f"max_new_tokens={self.max_new_tokens}, "
             f"use_cache={self.use_cache}, allow_cpu_offload={allow_cpu_offload}, "
             f"load_kwargs={load_kwargs}"
         )
@@ -175,22 +173,10 @@ class QwenCommander(BaseCommander):
         if cpu_load:
             print(
                 "[QWEN] optimize_memory CPU offload is disabled for quantized/device-mapped Qwen. "
-                "Use QWEN_MAX_BATCH_SIZE/QWEN_MAX_NEW_TOKENS to reduce runtime memory."
+                "Use QWEN_MAX_NEW_TOKENS to reduce runtime memory."
             )
 
     def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
-        batch_size = len(message.instruction)
-        if batch_size > self.max_batch_size:
-            responses: List[Dict] = []
-            for start in range(0, batch_size, self.max_batch_size):
-                chunk = _slice_batched_message(message, start, start + self.max_batch_size)
-                responses.extend(self._process_batched_chunk(chunk, inference_mode))
-                _clear_cuda_cache()
-            return responses
-
-        return self._process_batched_chunk(message, inference_mode)
-
-    def _process_batched_chunk(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
         system_message = {'role': "system", "content":BASE_SYSTEM_PROMPT}
         formatted_inputs = []
         instruction_roles = get_instruction_roles(message)
@@ -373,19 +359,6 @@ def _log_loaded_model_state(model: Any) -> None:
             print(f"[QWEN] Could not compute model memory footprint: {err}")
 
 
-def _slice_batched_message(message: BatchedMessageCommander, start: int, end: int) -> BatchedMessageCommander:
-    instruction_roles = get_instruction_roles(message)
-    return BatchedMessageCommander(
-        memory=message.memory[start:end],
-        attributes=message.attributes[start:end],
-        history=message.history[start:end],
-        function=message.function[start:end],
-        instruction=message.instruction[start:end],
-        instruction_role=instruction_roles[start:end],
-        prediction_mode=message.prediction_mode,
-    )
-
-
 def _validate_batch(message: BatchedMessageCommander) -> None:
     batch_size = len(message.instruction)
     if not batch_size:
@@ -399,12 +372,6 @@ def _validate_batch(message: BatchedMessageCommander) -> None:
                 f"({len(field_value)} != {batch_size})."
             )
 
-
-def _clear_cuda_cache() -> None:
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, "ipc_collect"):
-            torch.cuda.ipc_collect()
 
 THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 INTENT_RE = re.compile(r"<intent>\s*(.*?)\s*</intent>", re.DOTALL)

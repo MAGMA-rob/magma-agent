@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     commander_chat_template: Optional[str] = None
     optimize_memory: bool = False
     qwen_quantization: str = "4bit"
-    qwen_max_batch_size: int = 1
     qwen_max_new_tokens: int = 1500
     qwen_attn_implementation: Optional[str] = "sdpa"
     qwen_use_cache: bool = True
