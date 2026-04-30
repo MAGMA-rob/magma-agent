@@ -11,6 +11,7 @@ from .history import get_history_content, get_instruction_roles
 try:
     from openai_harmony import (  # type: ignore
         Role,
+        Author,
         Message,
         Conversation,
         DeveloperContent,
@@ -22,6 +23,7 @@ try:
     )
 except ModuleNotFoundError:
     Role = None  # type: ignore
+    Author = None  # type: ignore
     Message = None  # type: ignore
     Conversation = None  # type: ignore
     DeveloperContent = None  # type: ignore
@@ -32,40 +34,66 @@ except ModuleNotFoundError:
     HarmonyEncodingName = None  # type: ignore
 
 
-GPT_OSS_MODEL_ALIASES = {
-    "gpt-oss": "openai/gpt-oss-20b",
-    "gpt-oss:20b": "openai/gpt-oss-20b",
-    "gpt-oss:120b": "openai/gpt-oss-120b",
-    "gpt_oss": "openai/gpt-oss-20b",
-    "gpt_oss:20b": "openai/gpt-oss-20b",
-    "gpt_oss:120b": "openai/gpt-oss-120b",
-}
-
 SINGLE_AGENT_INSTRUCTIONS = """You are MAGMA's single-agent robot commander.
 
-Use the full conversation history and the current task attributes to decide the next response.
-There is no persistent memory agent in this mode, so do not summarize or update memory.
+You control a robot through optional Harmony function calls. Your job is to choose the next best response given:
+- the current instruction or status update
+- task attributes describing the current environment
+- read-only memory, when present
+- the full conversation history
+- the available tools
 
-When a robot action is required, call exactly one available function in the commentary channel.
-When no robot action is required, answer in the final channel.
-Never call a function that is not declared in the current tool list.
-Keep user-facing text concise and operational.
+Core decision rules:
+- Use the history to infer what already happened, what failed, and what remains to do.
+- Do not repeat a tool call that already succeeded.
+- If a previous tool call failed, recover by correcting the call, choosing another valid tool, verifying state, or asking for missing information.
+- Operate under partial observability: do not assume an object, location, or state exists unless it is in task attributes, memory, history, or can be checked with a tool.
+- Maintain a coherent long-horizon plan, but only take the next necessary step.
+
+Tool policy:
+- Call a tool only when it is necessary for progress.
+- Call at most one tool per response.
+- Use only tools declared in the current tool list.
+- Tool arguments must be valid JSON and must match the declared schema.
+- Ground every argument in the provided context. Do not invent object names, robot names, quantities, or locations.
+- Put function calls in the commentary channel using the provided Harmony tool-calling mechanism.
+- Do not write tool-call JSON as plain text in the final channel.
+
+Final-channel policy:
+- Use the final channel only for the user-facing `say` text.
+- If no tool is needed, answer concisely in the final channel.
+- If information is missing, ask a concise clarification in the final channel instead of guessing.
+- Do not expose hidden reasoning, chain of thought, or the Harmony format.
+- Keep user-facing text short, operational, and consistent with any tool call.
 """
 
 
 class OSSCommander(BaseCommander):
 
-    def __init__(self, model_id: str = "openai/gpt-oss-20b", cpu_load: bool = False) -> None:
+    def __init__(self, model_id: str, cpu_load: bool = False) -> None:
         self._ensure_harmony_available()
-        super().__init__(normalize_gpt_oss_model_id(model_id), cpu_load=cpu_load, dtype="auto")
-        self.encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        self.encoding = self._load_harmony_encoding()
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
         self.reasoning_effort = ReasoningEffort.MEDIUM
+        super().__init__(
+            model_id,
+            cpu_load=False,
+            dtype="auto",
+            load_kwargs={"device_map": "auto"},
+            runtime_device_move=False,
+        )
+        if cpu_load:
+            print(
+                "[OSS COMMANDER] optimize_memory CPU offload is disabled for gpt-oss "
+                "because the model is loaded with device_map='auto'."
+            )
 
     def process_batched_entry(self, message: BatchedMessageCommander, inference_mode: bool) -> List[Dict]:
         conversations = []
         prefill_ids = []
         instruction_roles = get_instruction_roles(message)
+
+        self._validate_batch(message)
 
         for i in range(len(message.instruction)):
             tools = self._build_tool_descriptions(message.function[i])
@@ -75,6 +103,7 @@ class OSSCommander(BaseCommander):
                     instruction=message.instruction[i],
                     instruction_role=instruction_roles[i],
                     attributes=message.attributes[i],
+                    memory=message.memory[i],
                     tools=tools,
                 )
             )
@@ -106,12 +135,38 @@ class OSSCommander(BaseCommander):
                 "Install magma_agent dependencies or run 'pip install openai-harmony'."
             )
 
+    @staticmethod
+    def _load_harmony_encoding() -> Any:
+        try:
+            return load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        except Exception as err:
+            raise RuntimeError(
+                "OSSCommander could not initialize the gpt-oss Harmony encoding. "
+                "Make sure openai-harmony can access or cache its vocabulary before "
+                "loading the model."
+            ) from err
+
+    @staticmethod
+    def _validate_batch(message: BatchedMessageCommander) -> None:
+        batch_size = len(message.instruction)
+        if not batch_size:
+            raise ValueError("BatchedMessageCommander must contain at least one instruction.")
+
+        for field_name in ("memory", "attributes", "history", "function"):
+            field_value = getattr(message, field_name)
+            if len(field_value) != batch_size:
+                raise ValueError(
+                    f"{field_name} must have the same length as instruction "
+                    f"({len(field_value)} != {batch_size})."
+                )
+
     def _build_conversation(
         self,
         history: Sequence[Dict[str, Any]],
         instruction: str,
         instruction_role: str,
         attributes: Any,
+        memory: Sequence[Any],
         tools: Sequence[Any],
     ) -> Any:
         system_content = (
@@ -128,13 +183,19 @@ class OSSCommander(BaseCommander):
             Message.from_role_and_content(Role.DEVELOPER, developer_content),
         ]
 
+        pending_tool_recipients: List[str] = []
         for previous_message in history:
-            messages.append(self._history_to_harmony_message(previous_message))
+            history_messages, new_tool_recipients = self._history_to_harmony_messages(
+                previous_message,
+                pending_tool_recipients,
+            )
+            messages.extend(history_messages)
+            pending_tool_recipients = new_tool_recipients
 
         messages.append(
             self._content_to_harmony_message(
                 author=instruction_role,
-                content=self._format_current_instruction(instruction, attributes),
+                content=self._format_current_instruction(instruction, attributes, memory),
                 current=True,
             )
         )
@@ -150,8 +211,7 @@ class OSSCommander(BaseCommander):
                 raise ValueError(f"Tool declaration is missing a name: {tool}")
 
             parameters = tool.get("parameters", tool.get("arguments"))
-            if parameters is None:
-                parameters = {"type": "object", "properties": {}}
+            parameters = _normalize_tool_parameters(parameters, tool.get("optional", []))
 
             tools.append(
                 ToolDescription.new(
@@ -163,20 +223,48 @@ class OSSCommander(BaseCommander):
         return tools
 
     @staticmethod
-    def _format_current_instruction(instruction: str, attributes: Any) -> str:
+    def _format_current_instruction(instruction: str, attributes: Any, memory: Sequence[Any]) -> str:
         return (
             "Task attributes:\n"
             f"{_stringify(attributes)}\n\n"
+            "Memory:\n"
+            f"{_format_memory(memory)}\n\n"
             "Instruction:\n"
             f"{instruction}"
         )
 
-    def _history_to_harmony_message(self, previous_message: Dict[str, Any]) -> Any:
-        return self._content_to_harmony_message(
-            author=previous_message.get("author"),
-            content=get_history_content(previous_message),
-            current=False,
-        )
+    def _history_to_harmony_messages(
+        self,
+        previous_message: Dict[str, Any],
+        pending_tool_recipients: Sequence[str],
+    ) -> tuple[List[Any], List[str]]:
+        author = previous_message.get("author")
+        normalized_author = (author or "USER").lower()
+        content = get_history_content(previous_message)
+
+        if normalized_author in ("model", "assistant"):
+            say, actions = _split_model_history_content(content)
+            messages = []
+            if say:
+                messages.append(
+                    Message.from_role_and_content(Role.ASSISTANT, say).with_channel("final")
+                )
+            tool_messages = _actions_to_harmony_tool_calls(actions)
+            messages.extend(tool_messages)
+            return messages, [message.recipient for message in tool_messages if message.recipient]
+
+        if normalized_author in ("system", "status") and pending_tool_recipients:
+            recipient = pending_tool_recipients[0]
+            remaining = list(pending_tool_recipients[1:])
+            return [_tool_result_message(recipient, content)], remaining
+
+        return [
+            self._content_to_harmony_message(
+                author=author,
+                content=content,
+                current=False,
+            )
+        ], list(pending_tool_recipients)
 
     @staticmethod
     def _content_to_harmony_message(author: Optional[str], content: str, current: bool) -> Any:
@@ -269,7 +357,6 @@ class OSSCommander(BaseCommander):
 
     @staticmethod
     def _messages_to_commander_response(entries: Sequence[Any], sequence_mode: bool) -> Dict[str, Any]:
-        reasoning_parts = []
         final_parts = []
         commentary_parts = []
         actions = []
@@ -281,8 +368,8 @@ class OSSCommander(BaseCommander):
             text = _content_to_text(entry_dict.get("content", ""))
 
             if channel == "analysis":
-                reasoning_parts.append(text)
-            elif recipient:
+                continue
+            if recipient:
                 actions.append(_tool_action_from_message(recipient, text))
             elif channel == "final":
                 final_parts.append(text)
@@ -291,13 +378,11 @@ class OSSCommander(BaseCommander):
             elif text:
                 final_parts.append(text)
 
-        reasoning = "\n".join(part for part in reasoning_parts if part).strip()
         say = "\n".join(part for part in (final_parts or commentary_parts) if part).strip()
         action: Any = actions if sequence_mode else (actions[0] if actions else {})
 
         return {
-            "reasoning": reasoning,
-            "think": reasoning,
+            "think": "",
             "say": say,
             "action": action,
         }
@@ -310,37 +395,18 @@ class OSSCommander(BaseCommander):
     ) -> Dict[str, Any]:
         print(f"[OSS COMMANDER] Harmony parse failed: {err}")
         text = self.encoding.decode(completion_ids)
-        reasoning = _extract_channel_text(text, "analysis")
         say = _extract_channel_text(text, "final")
         actions = _extract_tool_actions(text)
         action: Any = actions if sequence_mode else (actions[0] if actions else {})
 
-        if not reasoning and not say and not action:
+        if not say and not action:
             say = text.strip()
 
         return {
-            "reasoning": reasoning,
-            "think": reasoning,
+            "think": "",
             "say": say,
             "action": action,
         }
-
-
-def normalize_gpt_oss_model_id(model_id: Optional[str]) -> str:
-    if not model_id:
-        return "openai/gpt-oss-20b"
-
-    normalized = model_id.strip()
-    alias_key = normalized.lower()
-    if alias_key in GPT_OSS_MODEL_ALIASES:
-        return GPT_OSS_MODEL_ALIASES[alias_key]
-
-    if "/" not in normalized and re.fullmatch(r"gpt[-_]oss[-_:](20b|120b)", alias_key):
-        size = re.search(r"(20b|120b)", alias_key)
-        if size:
-            return f"openai/gpt-oss-{size.group(1)}"
-
-    return normalized
 
 
 def _stringify(value: Any) -> str:
@@ -349,6 +415,69 @@ def _stringify(value: Any) -> str:
     if value is None:
         return "{}"
     return str(value)
+
+
+def _format_memory(memory: Sequence[Any]) -> str:
+    if not memory:
+        return "empty"
+    return "\n".join(f"- {_stringify(item)}" for item in memory)
+
+
+def _normalize_tool_parameters(parameters: Any, optional: Sequence[str] | None = None) -> Dict[str, Any]:
+    if parameters is None:
+        return {"type": "object", "properties": {}}
+
+    if isinstance(parameters, dict) and parameters.get("type") == "object":
+        schema = dict(parameters)
+        schema.setdefault("properties", {})
+        return schema
+
+    if not isinstance(parameters, dict):
+        return {"type": "object", "properties": {}}
+
+    optional_names = set(optional or [])
+    properties: Dict[str, Any] = {}
+    required = []
+
+    for name, spec in parameters.items():
+        if not isinstance(spec, dict):
+            properties[name] = {"type": _json_schema_type(spec)}
+        else:
+            prop = dict(spec)
+            prop["type"] = _json_schema_type(prop.get("type", "string"))
+            properties[name] = prop
+
+        if name not in optional_names:
+            required.append(name)
+
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _json_schema_type(value: Any) -> str:
+    if isinstance(value, type):
+        value = value.__name__
+    value = str(value).lower()
+    return {
+        "str": "string",
+        "string": "string",
+        "int": "integer",
+        "integer": "integer",
+        "float": "number",
+        "double": "number",
+        "number": "number",
+        "bool": "boolean",
+        "boolean": "boolean",
+        "list": "array",
+        "array": "array",
+        "dict": "object",
+        "object": "object",
+    }.get(value, "string")
 
 
 def _content_to_text(content: Any) -> str:
@@ -368,8 +497,14 @@ def _content_to_text(content: Any) -> str:
 
 
 def _tool_action_from_message(recipient: str, text: str) -> Dict[str, Any]:
-    arguments = _parse_json_object(text)
+    arguments = _parse_json_object(text, quiet=False)
     tool_name = recipient.rsplit(".", 1)[-1]
+
+    if arguments.get("name") and "arguments" in arguments:
+        return {
+            "name": arguments.get("name"),
+            "arguments": arguments.get("arguments", {}),
+        }
 
     if tool_name == recipient and "name" in arguments:
         return {
@@ -383,13 +518,120 @@ def _tool_action_from_message(recipient: str, text: str) -> Dict[str, Any]:
     }
 
 
-def _parse_json_object(text: str) -> Dict[str, Any]:
+def _split_model_history_content(content: str) -> tuple[str, List[Dict[str, Any]]]:
+    parsed = _parse_json_object(content, quiet=True)
+    if parsed:
+        if "say" in parsed or "action" in parsed:
+            return str(parsed.get("say", "") or ""), _normalize_action_list(parsed.get("action"))
+        if _looks_like_action(parsed):
+            return "", _normalize_action_list(parsed)
+
+    say, action = _split_trailing_json_action(content)
+    return say, _normalize_action_list(action)
+
+
+def _split_trailing_json_action(content: str) -> tuple[str, Any]:
+    text = content.strip()
+    if not text.endswith("}"):
+        return text, {}
+
+    end = len(text)
+    depth = 0
+    start = None
+    for idx in range(end - 1, -1, -1):
+        char = text[idx]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            depth -= 1
+            if depth == 0:
+                start = idx
+                break
+
+    if start is None:
+        return text, {}
+
+    candidate = text[start:end]
+    action = _parse_json_object(candidate, quiet=True)
+    if not action or not _looks_like_action(action):
+        return text, {}
+
+    return text[:start].strip(), action
+
+
+def _looks_like_action(value: Any) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    if isinstance(value.get("name"), str):
+        return True
+    return any(isinstance(item, dict) and isinstance(item.get("name"), str) for item in value.values())
+
+
+def _normalize_action_list(action: Any) -> List[Dict[str, Any]]:
+    if not action:
+        return []
+    if isinstance(action, list):
+        actions = []
+        for item in action:
+            actions.extend(_normalize_action_list(item))
+        return actions
+    if not isinstance(action, dict):
+        return []
+    if isinstance(action.get("name"), str):
+        return [{"name": action["name"], "arguments": action.get("arguments", {}) or {}}]
+
+    actions = []
+    for value in action.values():
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            actions.append({"name": value["name"], "arguments": value.get("arguments", {}) or {}})
+    return actions
+
+
+def _actions_to_harmony_tool_calls(actions: Sequence[Dict[str, Any]]) -> List[Any]:
+    messages = []
+    for action in actions:
+        name = action.get("name")
+        if not name:
+            continue
+        arguments = action.get("arguments", {}) or {}
+        messages.append(
+            Message.from_role_and_content(Role.ASSISTANT, json.dumps(arguments, ensure_ascii=True))
+            .with_channel("commentary")
+            .with_recipient(f"functions.{name}")
+            .with_content_type("<|constrain|> json")
+        )
+    return messages
+
+
+def _tool_result_message(recipient: str, content: str) -> Any:
+    return (
+        Message.from_author_and_content(
+            Author.new(Role.TOOL, recipient),
+            _status_content_without_previous_tool_call(content),
+        )
+        .with_channel("commentary")
+    )
+
+
+def _status_content_without_previous_tool_call(content: str) -> str:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return content
+    if isinstance(parsed, dict):
+        parsed.pop("previous_tool_call", None)
+        return json.dumps(parsed, ensure_ascii=True)
+    return content
+
+
+def _parse_json_object(text: str, quiet: bool = False) -> Dict[str, Any]:
     if not text.strip():
         return {}
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        print("[OSS COMMANDER] Invalid tool call JSON")
+        if not quiet:
+            print("[OSS COMMANDER] Invalid tool call JSON")
         return {}
     if isinstance(parsed, dict):
         return parsed

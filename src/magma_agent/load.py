@@ -18,7 +18,7 @@ def load_commander(
         elif "original-smollm" in normalized_commander_id:
             print("[MAGMA AGENT] Loading SmolLM3")
             return SmolLMCommander(commander_id, optimize_memory)
-        elif "gpt-oss" in normalized_commander_id or "gpt_oss" in normalized_commander_id:
+        elif "oss" in normalized_commander_id:
             print(f"[MAGMA AGENT] Loading GPT OSS Commander Model : {commander_id}")
             return OSSCommander(commander_id, cpu_load=optimize_memory)
         else:
