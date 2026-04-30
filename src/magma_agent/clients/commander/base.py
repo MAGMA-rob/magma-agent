@@ -10,10 +10,11 @@ class BaseCommander(ABC):
     tokenizer : AutoTokenizer
     model : AutoModelForCausalLM
 
-    def __init__(self, model_id : str, cpu_load : bool, dtype: Any = torch.float16):
+    def __init__(self, model_id : str, cpu_load : bool, dtype: Any = torch.float16, quantization = None):
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            dtype=dtype,
+            torch_dtype=dtype,
+            quantization_config=quantization,
             low_cpu_mem_usage=True,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side='left')

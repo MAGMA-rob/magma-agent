@@ -19,14 +19,25 @@ class MagmaCommander(BaseCommander):
             raise ValueError(f"Unknow {output_style} commander output format. Avalaibles are json or qwen_format")
         self.output_style = output_style
 
-
     def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
  
         mx_lenght = 0
         formatted_inputs = []
         instruction_roles = get_instruction_roles(message)
+        batch_size = len(message.instruction)
 
-        for i in range(len(message.memory)):
+        if not batch_size:
+            raise ValueError("BatchedMessageCommander must contain at least one instruction.")
+
+        for field_name in ("memory", "attributes", "history", "function"):
+            field_value = getattr(message, field_name)
+            if len(field_value) != batch_size:
+                raise ValueError(
+                    f"{field_name} must have the same length as instruction "
+                    f"({len(field_value)} != {batch_size})."
+                )
+
+        for i in range(batch_size):
             memory = "Memory:\n" 
             for mem in message.memory[i]:
                 memory += f"- {mem}\n"
@@ -51,7 +62,6 @@ class MagmaCommander(BaseCommander):
                 ),
                 "content": message.instruction[i],
             })
-            
             formatted_inputs.append(self.tokenizer.apply_chat_template(
                     messages,
                     tools=message.function[i],
@@ -61,13 +71,23 @@ class MagmaCommander(BaseCommander):
                     add_generation_prompt=True
                 )
             )
-
             lenght = len(self.tokenizer(formatted_inputs[i], return_tensors="pt")["input_ids"][0])
+            if lenght == 0:
+                raise ValueError(
+                    "The commander chat template produced an empty prompt. "
+                    "Check that the loaded tokenizer/chat_template matches the "
+                    "model and the MagmaCommander formatting arguments."
+                )
 
             if mx_lenght < lenght:
                 mx_lenght = lenght
 
-        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding="max_length", max_length=mx_lenght).to(self.model.device)
+        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.model.device)
+        if os.getenv("MAGMA_DEBUG_TOKENIZER") == "1":
+            print("[COMMANDER][BATCH TOKENIZER DEBUG]")
+            print(f"batch_input_ids_shape={tuple(inputs['input_ids'].shape)}")
+            if "attention_mask" in inputs:
+                print(f"attention_mask_sums={inputs['attention_mask'].sum(dim=1).tolist()}")
         input_lengths = [len(x) for x in inputs["input_ids"]]
         with torch.no_grad():
             if inference_mode:
