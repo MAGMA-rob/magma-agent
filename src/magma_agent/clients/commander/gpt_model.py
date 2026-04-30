@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Sequence
 import json
+import os
 import re
 
 import torch
@@ -115,6 +116,7 @@ class OSSCommander(BaseCommander):
 
         inputs = self._pad_prefill_ids(prefill_ids)
         generation_kwargs = self._generation_kwargs(inputs, inference_mode)
+        self._debug_harmony_batch(prefill_ids, inputs, generation_kwargs)
 
         with torch.no_grad():
             output = self.model.generate(**generation_kwargs)
@@ -321,7 +323,7 @@ class OSSCommander(BaseCommander):
             "pad_token_id": self._pad_token_id(),
         }
         if self.stop_token_ids:
-            kwargs["eos_token_id"] = self.stop_token_ids
+            kwargs["eos_token_id"] = self._generation_stop_token_ids()
 
         if inference_mode:
             kwargs["do_sample"] = False
@@ -337,7 +339,9 @@ class OSSCommander(BaseCommander):
         return kwargs
 
     def _parse_completion(self, completion_ids: Sequence[int], sequence_mode: bool) -> Dict[str, Any]:
-        completion_ids = self._strip_stop_tokens(completion_ids)
+        raw_completion_ids = list(completion_ids)
+        completion_ids = self._strip_stop_tokens(raw_completion_ids)
+        self._debug_stripped_completion(raw_completion_ids, completion_ids)
 
         try:
             entries = self.encoding.parse_messages_from_completion_tokens(
@@ -351,11 +355,86 @@ class OSSCommander(BaseCommander):
         return self._messages_to_commander_response(entries, sequence_mode=sequence_mode)
 
     def _strip_stop_tokens(self, completion_ids: Sequence[int]) -> List[int]:
-        stop_token_ids = set(self.stop_token_ids)
+        stop_token_ids = set(self._completion_terminal_token_ids())
         trimmed = list(completion_ids)
         while trimmed and trimmed[-1] in stop_token_ids:
             trimmed.pop()
         return trimmed
+
+    def _generation_stop_token_ids(self) -> List[int]:
+        return _unique_token_ids(
+            list(self.stop_token_ids)
+            + _token_id_list(getattr(self.tokenizer, "eos_token_id", None))
+        )
+
+    def _completion_terminal_token_ids(self) -> List[int]:
+        return _unique_token_ids(
+            self._generation_stop_token_ids()
+            + _token_id_list(getattr(self.tokenizer, "pad_token_id", None))
+        )
+
+    def _debug_harmony_batch(
+        self,
+        prefill_ids: Sequence[Sequence[int]],
+        inputs: Dict[str, torch.Tensor],
+        generation_kwargs: Dict[str, Any],
+    ) -> None:
+        if not _harmony_debug_enabled():
+            return
+
+        print("[OSS COMMANDER][HARMONY DEBUG]")
+        print(f"prefill_lengths={[len(ids) for ids in prefill_ids]}")
+        print(f"batch_input_ids_shape={tuple(inputs['input_ids'].shape)}")
+        if "attention_mask" in inputs:
+            print(f"attention_mask_sums={inputs['attention_mask'].sum(dim=1).tolist()}")
+        print(f"generation_eos_token_id={generation_kwargs.get('eos_token_id')}")
+        print(f"completion_terminal_token_ids={self._completion_terminal_token_ids()}")
+        for token_id in self._completion_terminal_token_ids():
+            print(f"terminal_token[{token_id}]={self._decode_token_for_debug(token_id)!r}")
+
+        for index, ids in enumerate(prefill_ids[:2]):
+            tail = list(ids[-80:])
+            print(f"prefill[{index}].tail_ids={tail}")
+            print(f"prefill[{index}].tail_text={self.encoding.decode(tail)!r}")
+
+    def _debug_harmony_completion(self, completion_ids: Sequence[int]) -> None:
+        if not _harmony_debug_enabled():
+            return
+
+        ids = list(completion_ids)
+        print(f"[OSS COMMANDER][HARMONY DEBUG] completion_len={len(ids)}")
+        print(f"[OSS COMMANDER][HARMONY DEBUG] completion_head_ids={ids[:80]}")
+        print(f"[OSS COMMANDER][HARMONY DEBUG] completion_tail_ids={ids[-80:]}")
+        print(f"[OSS COMMANDER][HARMONY DEBUG] completion_text={self.encoding.decode(ids)!r}")
+        try:
+            tokenizer_text = self.tokenizer.decode(ids, skip_special_tokens=False)
+        except Exception as err:
+            tokenizer_text = f"<tokenizer decode failed: {err}>"
+        print(f"[OSS COMMANDER][HARMONY DEBUG] tokenizer_completion_text={tokenizer_text!r}")
+
+    def _decode_token_for_debug(self, token_id: int) -> str:
+        try:
+            return self.encoding.decode([token_id])
+        except Exception:
+            pass
+        try:
+            return self.tokenizer.decode([token_id], skip_special_tokens=False)
+        except Exception:
+            return ""
+
+    def _debug_stripped_completion(
+        self,
+        raw_completion_ids: Sequence[int],
+        completion_ids: Sequence[int],
+    ) -> None:
+        if not _harmony_debug_enabled() or len(raw_completion_ids) == len(completion_ids):
+            return
+
+        stripped_ids = list(raw_completion_ids[len(completion_ids):])
+        print(f"[OSS COMMANDER][HARMONY DEBUG] stripped_terminal_ids={stripped_ids}")
+        for token_id in stripped_ids:
+            decoded_token = self._decode_token_for_debug(token_id)
+            print(f"[OSS COMMANDER][HARMONY DEBUG] stripped_token[{token_id}]={decoded_token!r}")
 
     @staticmethod
     def _messages_to_commander_response(entries: Sequence[Any], sequence_mode: bool) -> Dict[str, Any]:
@@ -396,6 +475,7 @@ class OSSCommander(BaseCommander):
         sequence_mode: bool,
     ) -> Dict[str, Any]:
         print(f"[OSS COMMANDER] Harmony parse failed: {err}")
+        self._debug_harmony_completion(completion_ids)
         text = self.encoding.decode(completion_ids)
         say = _extract_channel_text(text, "final")
         actions = _extract_tool_actions(text)
@@ -409,6 +489,35 @@ class OSSCommander(BaseCommander):
             "say": say,
             "action": action,
         }
+
+
+def _harmony_debug_enabled() -> bool:
+    return os.getenv("MAGMA_DEBUG_HARMONY") == "1"
+
+
+def _token_id_list(value: Any) -> List[int]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        token_ids = []
+        for item in value:
+            token_ids.extend(_token_id_list(item))
+        return token_ids
+    try:
+        return [int(value)]
+    except (TypeError, ValueError):
+        return []
+
+
+def _unique_token_ids(token_ids: Sequence[int]) -> List[int]:
+    seen = set()
+    unique = []
+    for token_id in token_ids:
+        if token_id in seen:
+            continue
+        seen.add(token_id)
+        unique.append(token_id)
+    return unique
 
 
 def _stringify(value: Any) -> str:
