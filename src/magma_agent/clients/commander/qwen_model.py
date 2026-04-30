@@ -373,42 +373,32 @@ def _validate_batch(message: BatchedMessageCommander) -> None:
             )
 
 
-THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
-INTENT_RE = re.compile(r"<intent>\s*(.*?)\s*</intent>", re.DOTALL)
-SAY_RE = re.compile(r"<say>\s*(.*?)\s*</say>", re.DOTALL)
 TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)  
 
 def parse_blocks(text):
-    think_match = THINK_RE.search(text)
-    intent_match = INTENT_RE.search(text)
-    say_match = SAY_RE.search(text)
     tool_match = TOOL_RE.search(text)
 
-    think = think_match.group(1).strip() if think_match else ""
-    intent = intent_match.group(1).strip() if intent_match else ""
-    say = say_match.group(1).strip() if say_match else ""
-
-    # --- parse tool call ---
     action = {}
+    say = ""
+
     if tool_match:
+        # --- extract tool ---
         raw = tool_match.group(1).strip()
         try:
             action = json.loads(raw)
         except json.JSONDecodeError:
-            # hard failure: tool call must be exact
             print("[PARSE ERROR] Invalid tool_call JSON")
             action = {}
 
-    # --- sanity checks (optional but recommended) ---
-    if not intent:
-        print("[WARNING] Missing <intent> block")
+        # --- extract say (everything before tool_call) ---
+        say = text[:tool_match.start()].strip()
 
-    if not say:
-        print("[WARNING] Missing <say> block")
+    else:
+        # no tool_call → everything is say
+        say = text.strip()
 
     return {
-        "reasoning": think,
-        "think": intent,
+        "think": "-",  # volontairement ignoré
         "say": say,
         "action": action,
     }
