@@ -48,6 +48,8 @@ def create_app(settings: Settings) -> FastAPI:
                         "use_cache": settings.qwen_use_cache,
                         "device_map": settings.qwen_device_map,
                         "gpu_memory_limit": settings.qwen_gpu_memory_limit,
+                        "allow_cpu_offload": settings.qwen_allow_cpu_offload,
+                        "offload_folder": settings.qwen_offload_folder,
                     },
                 )
 

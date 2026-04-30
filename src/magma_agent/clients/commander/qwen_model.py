@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 import torch
 import json, re
+from pathlib import Path
 
 from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
@@ -131,27 +132,36 @@ class QwenCommander(BaseCommander):
         max_new_tokens: int = 1500,
         attn_implementation: Optional[str] = "sdpa",
         use_cache: bool = True,
-        device_map: str = "cuda",
+        device_map: str = "auto",
         gpu_memory_limit: Optional[str] = None,
+        allow_cpu_offload: bool = False,
+        offload_folder: str = "/tmp/magma_agent_qwen_offload",
     ) -> None:
         self.max_batch_size = max(1, int(max_batch_size))
         self.max_new_tokens = max(1, int(max_new_tokens))
         self.use_cache = use_cache
 
         compute_dtype = _best_compute_dtype()
-        quantization = _build_quantization_config(quantization_mode, compute_dtype)
+        quantization = _build_quantization_config(
+            quantization_mode,
+            compute_dtype,
+            allow_cpu_offload=allow_cpu_offload,
+        )
         load_kwargs = _build_load_kwargs(
             attn_implementation=attn_implementation,
             device_map=device_map,
             gpu_memory_limit=gpu_memory_limit,
+            offload_folder=offload_folder,
         )
 
         print(
             "[QWEN] Loading with "
             f"quantization={quantization_mode}, compute_dtype={compute_dtype}, "
             f"max_batch_size={self.max_batch_size}, max_new_tokens={self.max_new_tokens}, "
-            f"use_cache={self.use_cache}, load_kwargs={load_kwargs}"
+            f"use_cache={self.use_cache}, allow_cpu_offload={allow_cpu_offload}, "
+            f"load_kwargs={load_kwargs}"
         )
+        _log_cuda_memory("before Qwen load")
         super().__init__(
             model_name,
             cpu_load=False,
@@ -160,6 +170,8 @@ class QwenCommander(BaseCommander):
             load_kwargs=load_kwargs,
             runtime_device_move=False,
         )
+        _log_loaded_model_state(self.model)
+        _log_cuda_memory("after Qwen load")
         if cpu_load:
             print(
                 "[QWEN] optimize_memory CPU offload is disabled for quantized/device-mapped Qwen. "
@@ -260,7 +272,11 @@ def _best_compute_dtype() -> torch.dtype:
     return torch.float16
 
 
-def _build_quantization_config(quantization_mode: str, compute_dtype: torch.dtype):
+def _build_quantization_config(
+    quantization_mode: str,
+    compute_dtype: torch.dtype,
+    allow_cpu_offload: bool,
+):
     mode = (quantization_mode or "4bit").lower()
     if mode in ("4bit", "4-bit", "nf4"):
         return BitsAndBytesConfig(
@@ -268,9 +284,13 @@ def _build_quantization_config(quantization_mode: str, compute_dtype: torch.dtyp
                 bnb_4bit_compute_dtype=compute_dtype,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
+                llm_int8_enable_fp32_cpu_offload=allow_cpu_offload,
             )
     if mode in ("8bit", "8-bit", "int8"):
-        return BitsAndBytesConfig(load_in_8bit=True)
+        return BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=allow_cpu_offload,
+        )
     if mode in ("none", "no", "false", "0"):
         return None
     raise ValueError("qwen_quantization must be one of: 4bit, 8bit, none")
@@ -280,12 +300,13 @@ def _build_load_kwargs(
     attn_implementation: Optional[str],
     device_map: str,
     gpu_memory_limit: Optional[str],
+    offload_folder: str,
 ) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {}
     if attn_implementation:
         kwargs["attn_implementation"] = attn_implementation
 
-    normalized_device_map = (device_map or "cuda").lower()
+    normalized_device_map = (device_map or "auto").lower()
     if normalized_device_map == "auto":
         kwargs["device_map"] = "auto"
     elif normalized_device_map == "cpu":
@@ -298,10 +319,58 @@ def _build_load_kwargs(
     else:
         raise ValueError("qwen_device_map must be one of: cuda, auto, cpu")
 
-    if gpu_memory_limit and torch.cuda.is_available():
-        kwargs["max_memory"] = {torch.cuda.current_device(): gpu_memory_limit}
+    if torch.cuda.is_available() and normalized_device_map == "auto":
+        kwargs["max_memory"] = {torch.cuda.current_device(): gpu_memory_limit or _default_gpu_memory_limit()}
+
+    if normalized_device_map == "auto" and offload_folder:
+        Path(offload_folder).mkdir(parents=True, exist_ok=True)
+        kwargs["offload_folder"] = offload_folder
+        kwargs["offload_buffers"] = True
 
     return kwargs
+
+
+def _default_gpu_memory_limit() -> str:
+    free_bytes, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
+    # Leave headroom for bnb conversion buffers and allocator fragmentation during from_pretrained.
+    limit_gib = max(1, int((free_bytes * 0.88) // 1024**3))
+    return f"{limit_gib}GiB"
+
+
+def _log_cuda_memory(label: str) -> None:
+    if not torch.cuda.is_available():
+        print(f"[QWEN][MEM] {label}: cuda unavailable")
+        return
+
+    index = torch.cuda.current_device()
+    free_bytes, total_bytes = torch.cuda.mem_get_info(index)
+    allocated = torch.cuda.memory_allocated(index)
+    reserved = torch.cuda.memory_reserved(index)
+    print(
+        f"[QWEN][MEM] {label}: "
+        f"free={free_bytes / 1024**3:.2f}GiB total={total_bytes / 1024**3:.2f}GiB "
+        f"allocated={allocated / 1024**3:.2f}GiB reserved={reserved / 1024**3:.2f}GiB"
+    )
+
+
+def _log_loaded_model_state(model: Any) -> None:
+    device_map = getattr(model, "hf_device_map", None)
+    quantization_method = getattr(model, "quantization_method", None)
+    is_loaded_in_4bit = getattr(model, "is_loaded_in_4bit", False)
+    is_loaded_in_8bit = getattr(model, "is_loaded_in_8bit", False)
+    print(
+        "[QWEN] Loaded model state: "
+        f"is_loaded_in_4bit={is_loaded_in_4bit}, "
+        f"is_loaded_in_8bit={is_loaded_in_8bit}, "
+        f"quantization_method={quantization_method}, "
+        f"device_map={device_map}"
+    )
+    if hasattr(model, "get_memory_footprint"):
+        try:
+            footprint = model.get_memory_footprint()
+            print(f"[QWEN] Model memory footprint={footprint / 1024**3:.2f}GiB")
+        except Exception as err:
+            print(f"[QWEN] Could not compute model memory footprint: {err}")
 
 
 def _slice_batched_message(message: BatchedMessageCommander, start: int, end: int) -> BatchedMessageCommander:
