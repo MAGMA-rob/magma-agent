@@ -9,30 +9,20 @@ from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles
 
-try:
-    from openai_harmony import (  # type: ignore
-        Role,
-        Author,
-        Message,
-        Conversation,
-        DeveloperContent,
-        SystemContent,
-        ReasoningEffort,
-        ToolDescription,
-        load_harmony_encoding,
-        HarmonyEncodingName,
-    )
-except ModuleNotFoundError:
-    Role = None  # type: ignore
-    Author = None  # type: ignore
-    Message = None  # type: ignore
-    Conversation = None  # type: ignore
-    DeveloperContent = None  # type: ignore
-    SystemContent = None  # type: ignore
-    ReasoningEffort = None  # type: ignore
-    ToolDescription = None  # type: ignore
-    load_harmony_encoding = None  # type: ignore
-    HarmonyEncodingName = None  # type: ignore
+
+from openai_harmony import (
+    Role,
+    Author,
+    Message,
+    Conversation,
+    DeveloperContent,
+    SystemContent,
+    ReasoningEffort,
+    ToolDescription,
+    load_harmony_encoding,
+    HarmonyEncodingName,
+)
+
 
 
 SINGLE_AGENT_INSTRUCTIONS = """You are MAGMA's single-agent robot commander.
@@ -77,7 +67,7 @@ class OSSCommander(BaseCommander):
         self._ensure_harmony_available()
         self.encoding = self._load_harmony_encoding()
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
-        self.reasoning_effort = ReasoningEffort.MEDIUM
+        self.reasoning_effort = ReasoningEffort.LOW
         super().__init__(
             model_id,
             cpu_load=False,
@@ -492,7 +482,7 @@ class OSSCommander(BaseCommander):
 
 
 def _harmony_debug_enabled() -> bool:
-    return os.getenv("MAGMA_DEBUG_HARMONY") == "1"
+    return True
 
 
 def _token_id_list(value: Any) -> List[int]:
