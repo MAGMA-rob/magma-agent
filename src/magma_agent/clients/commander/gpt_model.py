@@ -340,9 +340,31 @@ class OSSCommander(BaseCommander):
                 strict=False,
             )
         except Exception as err:
+            normalized_ids = self._normalized_completion_ids_for_parse(completion_ids)
+            if normalized_ids != completion_ids:
+                try:
+                    entries = self.encoding.parse_messages_from_completion_tokens(
+                        normalized_ids,
+                        Role.ASSISTANT,
+                        strict=False,
+                    )
+                except Exception as normalized_err:
+                    err = normalized_err
+                else:
+                    return self._messages_to_commander_response(entries, sequence_mode=sequence_mode)
             return self._parse_completion_fallback(completion_ids, err, sequence_mode=sequence_mode)
 
         return self._messages_to_commander_response(entries, sequence_mode=sequence_mode)
+
+    def _normalized_completion_ids_for_parse(self, completion_ids: Sequence[int]) -> List[int]:
+        text = self.encoding.decode(completion_ids)
+        normalized_text = _normalize_harmony_completion_text(text)
+        if normalized_text == text:
+            return list(completion_ids)
+        try:
+            return self.encoding.encode(normalized_text, allowed_special="all")
+        except Exception:
+            return list(completion_ids)
 
     def _strip_stop_tokens(self, completion_ids: Sequence[int]) -> List[int]:
         stop_token_ids = set(self._completion_terminal_token_ids())
@@ -464,15 +486,18 @@ class OSSCommander(BaseCommander):
         err: Exception,
         sequence_mode: bool,
     ) -> Dict[str, Any]:
-        print(f"[OSS COMMANDER] Harmony parse failed: {err}")
-        self._debug_harmony_completion(completion_ids)
         text = self.encoding.decode(completion_ids)
         say = _extract_channel_text(text, "final")
         actions = _extract_tool_actions(text)
         action: Any = actions if sequence_mode else (actions[0] if actions else {})
 
         if not say and not action:
+            print(f"[OSS COMMANDER] Harmony parse failed: {err}")
+            self._debug_harmony_completion(completion_ids)
             say = text.strip()
+        elif _harmony_debug_enabled():
+            print(f"[OSS COMMANDER][HARMONY DEBUG] Harmony parse failed but fallback recovered: {err}")
+            self._debug_harmony_completion(completion_ids)
 
         return {
             "think": "",
@@ -699,7 +724,7 @@ def _actions_to_harmony_tool_calls(actions: Sequence[Dict[str, Any]]) -> List[An
             Message.from_role_and_content(Role.ASSISTANT, json.dumps(arguments, ensure_ascii=True))
             .with_channel("commentary")
             .with_recipient(f"functions.{name}")
-            .with_content_type("<|constrain|> json")
+            .with_content_type("json")
         )
     return messages
 
@@ -745,6 +770,15 @@ def _extract_channel_text(text: str, channel: str) -> str:
         re.DOTALL,
     )
     return "\n".join(match.group(1).strip() for match in pattern.finditer(text)).strip()
+
+
+def _normalize_harmony_completion_text(text: str) -> str:
+    text = re.sub(
+        r"(<\|start\|>assistant)(<\|channel\|>[A-Za-z0-9_-]+)\s+to=([A-Za-z0-9_.-]+)",
+        r"\1 to=\3\2",
+        text,
+    )
+    return re.sub(r"(?:<\|constrain\|>\s*)+json", "json", text)
 
 
 def _extract_tool_actions(text: str) -> List[Dict[str, Any]]:
