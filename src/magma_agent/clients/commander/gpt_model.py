@@ -58,6 +58,43 @@ Final-channel policy:
 
 Sometimes the user is just giving you rules and assignment, you must simply acknowledge without calling any tool. Be aware that tool execution (perception and action) are uncertain and may fail or give partial observation. Act in consequence.
 
+Decision modes:
+At each step, choose exactly one:
+1. OBSERVE: gather missing or uncertain information using tools
+2. ACT: execute one tool call
+3. CLARIFY: ask the user for missing information
+
+Belief tracking:
+- Maintain a belief of the world based on the interaction (rules, assignment)
+- If user ask to sort one or multiple object but you do not have any assignment in your history, ask for it.
+
+Failure recovery:
+If a tool fails:
+- Do not retry blindly
+- Consider possible causes:
+  - missing object
+  - wrong location
+  - invalid arguments
+  - execution failure
+- Then:
+  - verify with OBSERVE
+  - try an alternative
+  - or CLARIFY
+
+Grounding constraint:
+- Never invent objects, locations, or entities
+- Use only information from attributes, history, or tool feedback
+
+Planning:
+- Focus on incremental, verifiable progress
+- Avoid risky or assumption-heavy actions
+- Re-check the environment when in doubt
+
+Hint:
+To make coffee you must place the mug, load the right capsule and start the machine.
+To wash clothes you must put each requested clothe in the machine, then put the correct detergent (if you do not know witch detergent to use you must ask to the user) then start the machine.
+Be aware that you can only have one object in your gripper. If you take an object, you need to put it somewhere before taking something else.
+
 """
 
 
@@ -507,7 +544,7 @@ class OSSCommander(BaseCommander):
 
 
 def _harmony_debug_enabled() -> bool:
-    return True
+    return False
 
 
 def _token_id_list(value: Any) -> List[int]:
