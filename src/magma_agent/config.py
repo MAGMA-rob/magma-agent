@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     qwen_max_new_tokens: int = 1500
     qwen_attn_implementation: Optional[str] = "sdpa"
     qwen_use_cache: bool = True
+    qwen_enable_thinking: bool = False
     qwen_device_map: str = "auto"
     qwen_gpu_memory_limit: Optional[str] = None
     qwen_allow_cpu_offload: bool = False

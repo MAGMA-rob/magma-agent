@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--qwen-max-new-tokens", type=int)
     parser.add_argument("--qwen-attn-implementation")
     parser.add_argument("--qwen-use-cache", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--qwen-enable-thinking", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--qwen-device-map", choices=("auto", "cuda", "cpu"))
     parser.add_argument("--qwen-gpu-memory-limit")
     parser.add_argument("--qwen-allow-cpu-offload", action=argparse.BooleanOptionalAction, default=None)

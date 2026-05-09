@@ -45,6 +45,7 @@ def create_app(settings: Settings) -> FastAPI:
                         "max_new_tokens": settings.qwen_max_new_tokens,
                         "attn_implementation": settings.qwen_attn_implementation,
                         "use_cache": settings.qwen_use_cache,
+                        "enable_thinking": settings.qwen_enable_thinking,
                         "device_map": settings.qwen_device_map,
                         "gpu_memory_limit": settings.qwen_gpu_memory_limit,
                         "allow_cpu_offload": settings.qwen_allow_cpu_offload,

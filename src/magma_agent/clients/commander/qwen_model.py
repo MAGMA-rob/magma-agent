@@ -9,115 +9,77 @@ from .history import get_history_content, get_instruction_roles, map_chat_role
 
 from transformers import BitsAndBytesConfig
 
-BASE_SYSTEM_PROMPT = """You are a COMMANDER agent controlling a robot through structured tool calls.
+BASE_SYSTEM_PROMPT = """You are MAGMA's single-agent robot commander.
 
-Your role is to decide the NEXT best action given:
-- the current user query
-- the task attributes
+You control a robot through optional function calls. Your job is to choose the next best response given:
+- the current instruction or status update
+- task attributes describing the current environment
+- the full conversation history
 - the available tools
-- the full interaction history
 
-You must output TWO things:
-1. A natural language response to the user
-2. (Optional) ONE tool call
+Core decision rules:
+- Use the history to infer what already happened, what failed, and what remains to do.
+- Do not repeat a tool call that already succeeded.
+- If a previous tool call failed, recover by correcting the call, choosing another valid tool, verifying state, or asking for missing information.
+- Operate under partial observability: do not assume an object, location, or state exists unless it is in task attributes, memory, history, or can be checked with a tool.
+- Maintain a coherent long-horizon plan, but only take the next necessary step.
 
-----------------------------------------
-OUTPUT FORMAT (STRICT)
-----------------------------------------
+Tool policy:
+- Call a tool only when it is necessary for progress.
+- Call at most one tool per response.
+- Use only tools declared in the current tool list.
+- Tool arguments must be valid JSON and must match the declared schema.
+- Ground every argument in the provided context. Do not invent object names, robot names, quantities, or locations.
+- If you call a tool, write exactly one tool block after the user-facing text:
+<tool_call>{"name":"<func_name>","arguments":{"param":"value"}}</tool_call>
+- If no tool is needed, do not output a tool block.
 
-say:
-- What you say to the user
+User-facing text policy:
+- The text outside <tool_call> is the `say` response.
+- Keep `say` short, operational, and consistent with any tool call.
+- Do not write a `say:` label.
+- Do not expose hidden reasoning, chain of thought, analysis, or <think> blocks.
 
-<tool_call>
-{"robot_name":{"name":<func_name>, "arguments":{"param":<value>}}}
-</tool_call>
+Sometimes the user is just giving you rules and assignment, you must simply acknowledge without calling any tool. Be aware that tool execution (perception and action) are uncertain and may fail or give partial observation. Act in consequence.
 
-If no action is needed, DO NOT output <tool_call>.
+Decision modes:
+At each step, choose exactly one:
+1. OBSERVE: gather missing or uncertain information using tools
+2. ACT: execute one tool call
+3. CLARIFY: ask the user for missing information
 
-----------------------------------------
-CORE DECISION RULES
-----------------------------------------
+Belief tracking:
+- Maintain a belief of the world based on the interaction (rules, assignment)
+- If user ask to sort one or multiple object but you do not have any assignment in your history, ask for it.
 
-1. HISTORY-AWARE DECISION
-- Use the full interaction history to infer:
-  - what has already been done
-  - what failed or succeeded
-  - what remains to be achieved
-- Do NOT repeat actions that already succeeded
-- If an action may have failed, consider re-checking before retrying
+Failure recovery:
+If a tool fails:
+- Do not retry blindly
+- Consider possible causes:
+  - missing object
+  - wrong location
+  - invalid arguments
+  - execution failure
+- Then:
+  - verify with OBSERVE
+  - try an alternative
+  - or CLARIFY
 
-2. LONG-HORIZON CONSISTENCY
-- Your goal is NOT to complete the task in one step
-- You must maintain a coherent multi-step strategy
-- Prefer safe intermediate actions over risky assumptions
+Grounding constraint:
+- Never invent objects, locations, or entities
+- Use only information from attributes, history, or tool feedback
 
-3. PARTIAL OBSERVABILITY
-- The environment may be incomplete or outdated
-- Do NOT assume objects are present unless confirmed
-- Use perception tools (e.g. detect) when needed
+Planning:
+- Focus on incremental, verifiable progress
+- Avoid risky or assumption-heavy actions
+- Re-check the environment when in doubt
 
-4. EXECUTION UNCERTAINTY
-- A correct action can still fail
-- If an action might have failed:
-  - verify before continuing
-  - retry if appropriate
+Hint:
+To make coffee you must place the mug, load the right capsule and start the machine.
+To wash clothes you must put each requested clothe in the machine, then put the correct detergent (if you do not know witch detergent to use you must ask to the user) then start the machine.
+Be aware that you can only have one object in your gripper. If you take an object, you need to put it somewhere before taking something else.
 
-5. TOOL USAGE POLICY
-- Only call a tool if it is necessary for progress
-- Only ONE tool call per step
-- Arguments must be grounded in known objects or attributes
-- Do NOT hallucinate object names
-
-6. NO OVER-COMMITMENT
-- If information is missing:
-  - ask for clarification OR
-  - call a perception tool
-- Do NOT guess hidden state
-
-----------------------------------------
-TOOL CALL FORMAT (STRICT)
-----------------------------------------
-
-- Must be valid JSON
-- EXACT schema:
-  {"robot_name":{"name":<func_name>, "arguments":{"param":<value>}}}
-
-- NO extra fields
-- NO comments
-- NO text outside <tool_call>
-
-----------------------------------------
-BEHAVIORAL GUIDELINES
-----------------------------------------
-
-- Be concise and goal-directed
-- Do not explain your reasoning
-- Do not describe the schema
-- Do not output multiple tool calls
-- Do not simulate future steps
-
-----------------------------------------
-FAILURE HANDLING
-----------------------------------------
-
-If the situation is uncertain or inconsistent:
-- Prefer VERIFY → then ACT
-- Prefer RECOVER → instead of restarting
-
-----------------------------------------
-IMPORTANT
-----------------------------------------
-
-You are trained to operate under:
-- partial observability
-- stochastic execution
-- evolving goals
-
-Your objective is to produce actions that remain consistent and recoverable over time, not just locally optimal.
-
-----------------------------------------
-INPUTS
-----------------------------------------
+/no_think
 """
 
 
@@ -135,9 +97,11 @@ class QwenCommander(BaseCommander):
         gpu_memory_limit: Optional[str] = None,
         allow_cpu_offload: bool = False,
         offload_folder: str = "/tmp/magma_agent_qwen_offload",
+        enable_thinking: bool = False,
     ) -> None:
         self.max_new_tokens = max(1, int(max_new_tokens))
         self.use_cache = use_cache
+        self.enable_thinking = bool(enable_thinking)
 
         compute_dtype = _best_compute_dtype()
         quantization = _build_quantization_config(
@@ -157,6 +121,7 @@ class QwenCommander(BaseCommander):
             f"quantization={quantization_mode}, compute_dtype={compute_dtype}, "
             f"max_new_tokens={self.max_new_tokens}, "
             f"use_cache={self.use_cache}, allow_cpu_offload={allow_cpu_offload}, "
+            f"enable_thinking={self.enable_thinking}, "
             f"load_kwargs={load_kwargs}"
         )
         _log_cuda_memory("before Qwen load")
@@ -209,11 +174,12 @@ class QwenCommander(BaseCommander):
                 "content": prompt_user,
             })
 
-            formatted_inputs.append(self.tokenizer.apply_chat_template(
+            formatted_inputs.append(
+                _apply_chat_template(
+                    self.tokenizer,
                     messages,
                     tools=message.function[i],
-                    tokenize=False,
-                    add_generation_prompt=True
+                    enable_thinking=self.enable_thinking,
                 )
             )
 
@@ -373,33 +339,74 @@ def _validate_batch(message: BatchedMessageCommander) -> None:
             )
 
 
-TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)  
+THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
+UNFINISHED_THINK_RE = re.compile(r"<think>.*$", re.DOTALL)
+TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
-def parse_blocks(text):
-    tool_match = TOOL_RE.search(text)
 
-    action = {}
-    say = ""
+def _apply_chat_template(tokenizer: Any, messages: List[Dict[str, Any]], tools: Any, enable_thinking: bool) -> str:
+    kwargs = {
+        "tools": tools,
+        "tokenize": False,
+        "add_generation_prompt": True,
+        "enable_thinking": enable_thinking,
+    }
+    try:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+    except TypeError as err:
+        if "enable_thinking" not in str(err):
+            raise
+        kwargs.pop("enable_thinking")
+        return tokenizer.apply_chat_template(messages, **kwargs)
 
+
+def parse_blocks(text: str) -> Dict[str, Any]:
+    raw_text = text.strip()
+    text_without_think = THINK_RE.sub("", raw_text)
+    text_without_think = UNFINISHED_THINK_RE.sub("", text_without_think).strip()
+
+    tool_match = TOOL_RE.search(text_without_think)
+    action: Any = {}
     if tool_match:
-        # --- extract tool ---
         raw = tool_match.group(1).strip()
-        try:
-            action = json.loads(raw)
-        except json.JSONDecodeError:
-            print("[PARSE ERROR] Invalid tool_call JSON")
-            action = {}
+        action = _normalize_action(_load_json_object(raw, label="tool_call"))
 
-        # --- extract say (everything before tool_call) ---
-        say = text[:tool_match.start()].strip()
-
-    else:
-        # no tool_call → everything is say
-        say = text.strip()
+    say = TOOL_RE.sub("", text_without_think).strip()
+    say = re.sub(r"^\s*say\s*:\s*", "", say, flags=re.IGNORECASE).strip()
 
     return {
-        "think": "-",  # volontairement ignoré
+        "think": "",
         "say": say,
         "action": action,
     }
+
+
+def _load_json_object(text: Any, label: str = "JSON", quiet: bool = False) -> Dict[str, Any]:
+    if not isinstance(text, str):
+        return text if isinstance(text, dict) else {}
+    try:
+        parsed = json.loads(text.strip())
+    except json.JSONDecodeError:
+        if not quiet:
+            print(f"[PARSE ERROR] Invalid {label}")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_action(action: Any) -> Dict[str, Any]:
+    if not isinstance(action, dict) or not action:
+        return {}
+    if isinstance(action.get("name"), str):
+        return {
+            "name": action["name"],
+            "arguments": action.get("arguments", {}) or {},
+        }
+
+    for value in action.values():
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            return {
+                "name": value["name"],
+                "arguments": value.get("arguments", {}) or {},
+            }
+    return {}
  
