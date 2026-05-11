@@ -28,9 +28,10 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 
 COPY pyproject.toml .
+RUN pip install --upgrade pip
 COPY src ./src
 
-RUN pip install --upgrade pip
+
 RUN pip install .
 
 CMD [ "python3", "-m", "magma_agent"]

@@ -107,7 +107,7 @@ class MagmaCommander(BaseCommander):
         responses = []
         for i in range(len(formatted_inputs)):
             generated_tokens = output[i][input_lengths[i]:]
-            response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
 
             if self.output_style == "json":
                 try:
@@ -117,12 +117,14 @@ class MagmaCommander(BaseCommander):
                     responses.append({"think":response_text, "say":"", "action":"X"})
             else:
                 st = parse_blocks(response_text)
+                print(st)
                 responses.append(st)
 
         return responses
 
 
 def parse_blocks(text):
+    print(text)
     # 1. extract think
     think_match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
     think = think_match.group(1).strip() if think_match else ""
