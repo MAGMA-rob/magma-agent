@@ -6,6 +6,9 @@ from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles, map_chat_role
 
+TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
 class MagmaCommander(BaseCommander):
 
     def __init__(self, model_id, output_style, overriding_chat_template_path : Optional[str], cpu_load : bool) -> None:
@@ -133,21 +136,77 @@ def parse_blocks(text):
     after_think = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
     # 3. extract tool_call JSON
-    tool_match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", after_think, re.DOTALL)
-    tool_call = tool_match.group(1).strip() if tool_match else "{}"
-    try:
-        action = json.loads(tool_call)
-    except:
-        print("[COMMANDER] BAD MODEL OUTPUT")
-        action = tool_call
+    tool_match = TOOL_RE.search(after_think)
+    if tool_match:
+        tool_call = tool_match.group(1).strip()
+        try:
+            action = json.loads(tool_call)
+        except json.JSONDecodeError:
+            print("[COMMANDER] BAD MODEL OUTPUT")
+            action = tool_call
 
-    # 4. extract the "say" text (everything between </think> and <tool_call>)
-    say = re.sub(r"<tool_call>.*?</tool_call>", "", after_think, flags=re.DOTALL).strip()
+        # 4. extract the "say" text (everything between </think> and <tool_call>)
+        say = _strip_terminal_tokens(TOOL_RE.sub("", after_think))
+    else:
+        # Backward-compatible recovery for checkpoints that output: say + raw JSON.
+        action, say = _split_raw_trailing_json(after_think)
 
     return {
         "think": think,
         "say": say,
         "action": action,
     }
+
+
+def _split_raw_trailing_json(text):
+    decoder = json.JSONDecoder()
+    parsed_candidates = []
+
+    for match in re.finditer(r"\{", text):
+        start = match.start()
+        try:
+            parsed, offset = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            parsed_candidates.append((start, start + offset, parsed))
+
+    if not parsed_candidates:
+        return {}, text.strip()
+
+    clean_terminal_candidates = [
+        candidate
+        for candidate in parsed_candidates
+        if _is_terminal_suffix(text[candidate[1]:])
+    ]
+    if clean_terminal_candidates:
+        start, end, action = min(clean_terminal_candidates, key=lambda candidate: candidate[0])
+    else:
+        start, end, action = max(
+            parsed_candidates,
+            key=lambda candidate: (candidate[1] - candidate[0], -candidate[0]),
+        )
+    suffix = text[end:]
+    if _is_terminal_suffix(suffix):
+        suffix = ""
+    say = _strip_terminal_tokens(text[:start] + suffix)
+    say = re.sub(r"\btool_call\s*:\s*$", "", say, flags=re.IGNORECASE).strip()
+    say = re.sub(r"^\s*say\s*:\s*", "", say, flags=re.IGNORECASE).strip()
+    return action, say
+
+
+def _is_terminal_suffix(text):
+    suffix = text.strip()
+    if not suffix:
+        return True
+    return suffix in {"</s>", "<|im_end|>", "<|endoftext|>"}
+
+
+def _strip_terminal_tokens(text):
+    text = text.strip()
+    for token in ("</s>", "<|im_end|>", "<|endoftext|>"):
+        if text.endswith(token):
+            text = text[: -len(token)].strip()
+    return text
  
     
