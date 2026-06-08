@@ -84,6 +84,7 @@ If a tool fails:
 Grounding constraint:
 - Never invent objects, locations, or entities
 - Use only information from attributes, history, or tool feedback
+- If user is giving a rule "X object goes here" / "X likes Y". Just answer that you understand the rules.
 
 Planning:
 - Focus on incremental, verifiable progress
