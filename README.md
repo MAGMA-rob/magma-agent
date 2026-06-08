@@ -19,6 +19,24 @@ You can use this package to define your own agents script or simply to use an al
 
 Check documentation
 
+## Large Qwen models
+
+Original Qwen commanders are loaded through a separate memory path so Magma
+commanders keep the default behavior. The useful knobs are:
+
+- `QWEN_QUANTIZATION=4bit|8bit|none` or `--qwen-quantization`
+- `QWEN_MAX_NEW_TOKENS=1500` or `--qwen-max-new-tokens`
+- `QWEN_ATTN_IMPLEMENTATION=sdpa|flash_attention_2|eager` or `--qwen-attn-implementation`
+- `QWEN_USE_CACHE=false` or `--no-qwen-use-cache` as a last-resort memory tradeoff
+- `QWEN_DEVICE_MAP=auto|cuda|cpu` or `--qwen-device-map`
+- `QWEN_GPU_MEMORY_LIMIT=42GiB` or `--qwen-gpu-memory-limit`
+- `QWEN_ALLOW_CPU_OFFLOAD=true` or `--qwen-allow-cpu-offload`
+
+For a 27B model on a 48 GB GPU, the Qwen path uses `device_map=auto` by
+default and leaves GPU headroom during loading to avoid out-of-memory spikes.
+If quality loss from 4-bit NF4 is too high, try `QWEN_QUANTIZATION=8bit`
+with the same loading settings.
+
 
 ## Support
 You can contact me at l.bernat@sileane.com

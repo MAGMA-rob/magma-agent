@@ -1,6 +1,7 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import torch
-import json, os, re
+import json, re
+from pathlib import Path
 
 from magma_agent.messages import BatchedMessageCommander
 from .base import BaseCommander
@@ -8,136 +9,147 @@ from .history import get_history_content, get_instruction_roles, map_chat_role
 
 from transformers import BitsAndBytesConfig
 
-BASE_SYSTEM_PROMPT = """You are a COMMANDER agent controlling a robot through structured tool calls.
+BASE_SYSTEM_PROMPT = """You are MAGMA's single-agent robot commander.
 
-Your role is to decide the NEXT best action given:
-- the current user query
-- the task attributes
+You control a robot through optional function calls. Your job is to choose the next best response given:
+- the current instruction or status update
+- task attributes describing the current environment
+- the full conversation history
 - the available tools
-- the full interaction history
 
-You must output TWO things:
-1. A natural language response to the user
-2. (Optional) ONE tool call
+Core decision rules:
+- Use the history to infer what already happened, what failed, and what remains to do.
+- Do not repeat a tool call that already succeeded.
+- If a previous tool call failed, recover by correcting the call, choosing another valid tool, verifying state, or asking for missing information.
+- Operate under partial observability: do not assume an object, location, or state exists unless it is in task attributes, memory, history, or can be checked with a tool.
+- Maintain a coherent long-horizon plan, but only take the next necessary step.
 
-----------------------------------------
-OUTPUT FORMAT (STRICT)
-----------------------------------------
+Tool policy:
+- Call a tool only when it is necessary for progress.
+- Call at most one tool per response.
+- Use only tools declared in the current tool list.
+- Tool arguments must be valid JSON and must match the declared schema.
+- Ground every argument in the provided context. Do not invent object names, robot names, quantities, or locations.
+- If you call a tool, write exactly one tool block after the user-facing text:
+<tool_call>{"name":"<func_name>","arguments":{"param":"value"}}</tool_call>
+- If no tool is needed, do not output a tool block.
 
-say:
-- What you say to the user
+User-facing text policy:
+- The text outside <tool_call> is the `say` response.
+- Keep `say` short, operational, and consistent with any tool call.
+- Do not write a `say:` label.
+- Do not expose hidden reasoning, chain of thought, analysis, or <think> blocks.
 
-<tool_call>
-{"robot_name":{"name":<func_name>, "arguments":{"param":<value>}}}
-</tool_call>
+Sometimes the user is just giving you rules and assignment, you must simply acknowledge without calling any tool. Be aware that tool execution (perception and action) are uncertain and may fail or give partial observation. Act in consequence.
 
-If no action is needed, DO NOT output <tool_call>.
+Decision modes:
+At each step, choose exactly one:
+1. OBSERVE: gather missing or uncertain information using tools
+2. ACT: execute one tool call
+3. CLARIFY: ask the user for missing information
 
-----------------------------------------
-CORE DECISION RULES
-----------------------------------------
+Belief tracking:
+- Maintain a belief of the world based on the interaction (rules, assignment)
+- If user ask to sort one or multiple object but you do not have any assignment in your history, ask for it.
 
-1. HISTORY-AWARE DECISION
-- Use the full interaction history to infer:
-  - what has already been done
-  - what failed or succeeded
-  - what remains to be achieved
-- Do NOT repeat actions that already succeeded
-- If an action may have failed, consider re-checking before retrying
+Failure recovery:
+If a tool fails:
+- Do not retry blindly
+- Consider possible causes:
+  - missing object
+  - wrong location
+  - invalid arguments
+  - execution failure
+- Then:
+  - verify with OBSERVE
+  - try an alternative
+  - or CLARIFY
 
-2. LONG-HORIZON CONSISTENCY
-- Your goal is NOT to complete the task in one step
-- You must maintain a coherent multi-step strategy
-- Prefer safe intermediate actions over risky assumptions
+Grounding constraint:
+- Never invent objects, locations, or entities
+- Use only information from attributes, history, or tool feedback
 
-3. PARTIAL OBSERVABILITY
-- The environment may be incomplete or outdated
-- Do NOT assume objects are present unless confirmed
-- Use perception tools (e.g. detect) when needed
+Planning:
+- Focus on incremental, verifiable progress
+- Avoid risky or assumption-heavy actions
+- Re-check the environment when in doubt
 
-4. EXECUTION UNCERTAINTY
-- A correct action can still fail
-- If an action might have failed:
-  - verify before continuing
-  - retry if appropriate
+Hint:
+To make coffee you must place the mug, load the right capsule and start the machine.
+To wash clothes you must put each requested clothe in the machine, then put the correct detergent (if you do not know witch detergent to use you must ask to the user) then start the machine.
+Be aware that you can only have one object in your gripper. If you take an object, you need to put it somewhere before taking something else.
 
-5. TOOL USAGE POLICY
-- Only call a tool if it is necessary for progress
-- Only ONE tool call per step
-- Arguments must be grounded in known objects or attributes
-- Do NOT hallucinate object names
-
-6. NO OVER-COMMITMENT
-- If information is missing:
-  - ask for clarification OR
-  - call a perception tool
-- Do NOT guess hidden state
-
-----------------------------------------
-TOOL CALL FORMAT (STRICT)
-----------------------------------------
-
-- Must be valid JSON
-- EXACT schema:
-  {"robot_name":{"name":<func_name>, "arguments":{"param":<value>}}}
-
-- NO extra fields
-- NO comments
-- NO text outside <tool_call>
-
-----------------------------------------
-BEHAVIORAL GUIDELINES
-----------------------------------------
-
-- Be concise and goal-directed
-- Do not explain your reasoning
-- Do not describe the schema
-- Do not output multiple tool calls
-- Do not simulate future steps
-
-----------------------------------------
-FAILURE HANDLING
-----------------------------------------
-
-If the situation is uncertain or inconsistent:
-- Prefer VERIFY → then ACT
-- Prefer RECOVER → instead of restarting
-
-----------------------------------------
-IMPORTANT
-----------------------------------------
-
-You are trained to operate under:
-- partial observability
-- stochastic execution
-- evolving goals
-
-Your objective is to produce actions that remain consistent and recoverable over time, not just locally optimal.
-
-----------------------------------------
-INPUTS
-----------------------------------------
+/no_think
 """
 
 
 class QwenCommander(BaseCommander):
 
-    def __init__(self, model_name : str, cpu_load: bool = False) -> None:
-        quantization = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
+    def __init__(
+        self,
+        model_name : str,
+        cpu_load: bool = False,
+        quantization_mode: str = "4bit",
+        max_new_tokens: int = 1500,
+        attn_implementation: Optional[str] = "sdpa",
+        use_cache: bool = True,
+        device_map: str = "auto",
+        gpu_memory_limit: Optional[str] = None,
+        allow_cpu_offload: bool = False,
+        offload_folder: str = "/tmp/magma_agent_qwen_offload",
+        enable_thinking: bool = False,
+    ) -> None:
+        self.max_new_tokens = max(1, int(max_new_tokens))
+        self.use_cache = use_cache
+        self.enable_thinking = bool(enable_thinking)
+
+        compute_dtype = _best_compute_dtype()
+        quantization = _build_quantization_config(
+            quantization_mode,
+            compute_dtype,
+            allow_cpu_offload=allow_cpu_offload,
+        )
+        load_kwargs = _build_load_kwargs(
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+            gpu_memory_limit=gpu_memory_limit,
+            offload_folder=offload_folder,
+        )
+
+        print(
+            "[QWEN] Loading with "
+            f"quantization={quantization_mode}, compute_dtype={compute_dtype}, "
+            f"max_new_tokens={self.max_new_tokens}, "
+            f"use_cache={self.use_cache}, allow_cpu_offload={allow_cpu_offload}, "
+            f"enable_thinking={self.enable_thinking}, "
+            f"load_kwargs={load_kwargs}"
+        )
+        _log_cuda_memory("before Qwen load")
+        super().__init__(
+            model_name,
+            cpu_load=False,
+            dtype=compute_dtype,
+            quantization=quantization,
+            load_kwargs=load_kwargs,
+            runtime_device_move=False,
+        )
+        _log_loaded_model_state(self.model)
+        _log_cuda_memory("after Qwen load")
+        if cpu_load:
+            print(
+                "[QWEN] optimize_memory CPU offload is disabled for quantized/device-mapped Qwen. "
+                "Use QWEN_MAX_NEW_TOKENS to reduce runtime memory."
             )
-        super().__init__(model_name, cpu_load=False, quantization= quantization)
 
     def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
         system_message = {'role': "system", "content":BASE_SYSTEM_PROMPT}
         formatted_inputs = []
-        mx_lenght = 0
         instruction_roles = get_instruction_roles(message)
+        batch_size = len(message.instruction)
 
-        for i in range(len(message.instruction)):
+        _validate_batch(message)
+
+        for i in range(batch_size):
             
             mem_str = "Memory:\n"
             if len(message.memory[i]) > 0:
@@ -162,82 +174,239 @@ class QwenCommander(BaseCommander):
                 "content": prompt_user,
             })
 
-            formatted_inputs.append(self.tokenizer.apply_chat_template(
+            formatted_inputs.append(
+                _apply_chat_template(
+                    self.tokenizer,
                     messages,
                     tools=message.function[i],
-                    tokenize=False,
-                    add_generation_prompt=True
+                    enable_thinking=self.enable_thinking,
                 )
             )
 
-            lenght = len(self.tokenizer(formatted_inputs[i], return_tensors="pt")["input_ids"][0])
+        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.input_device)
+        prompt_length = inputs["input_ids"].shape[1]
+        generation_kwargs: Dict[str, Any] = {
+            **inputs,
+            "max_new_tokens": self.max_new_tokens,
+            "use_cache": self.use_cache,
+            "pad_token_id": self.tokenizer.pad_token_id,
+        }
+        if self.tokenizer.eos_token_id is not None:
+            generation_kwargs["eos_token_id"] = self.tokenizer.eos_token_id
 
-            if mx_lenght < lenght:
-                mx_lenght = lenght
-
-        inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding="max_length", max_length=mx_lenght).to(self.model.device)
-        input_lengths = [len(x) for x in inputs["input_ids"]]
-        with torch.no_grad():
+        with torch.inference_mode():
             if inference_mode:
                 output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=1500,
+                    **generation_kwargs,
                     do_sample=False,  
                 )
             else:
                 output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=1500,
+                    **generation_kwargs,
+                    do_sample=True,
                     temperature=0.6,
                     top_p=0.95,
                     top_k=20
                 )
         responses = []
         for i in range(len(formatted_inputs)):
-            generated_tokens = output[i][input_lengths[i]:]
+            generated_tokens = output[i][prompt_length:]
             response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
             st = parse_blocks(response_text)
             responses.append(st)
 
         return responses
 
+
+def _best_compute_dtype() -> torch.dtype:
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+def _build_quantization_config(
+    quantization_mode: str,
+    compute_dtype: torch.dtype,
+    allow_cpu_offload: bool,
+):
+    mode = (quantization_mode or "4bit").lower()
+    if mode in ("4bit", "4-bit", "nf4"):
+        return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=compute_dtype,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                llm_int8_enable_fp32_cpu_offload=allow_cpu_offload,
+            )
+    if mode in ("8bit", "8-bit", "int8"):
+        return BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=allow_cpu_offload,
+        )
+    if mode in ("none", "no", "false", "0"):
+        return None
+    raise ValueError("qwen_quantization must be one of: 4bit, 8bit, none")
+
+
+def _build_load_kwargs(
+    attn_implementation: Optional[str],
+    device_map: str,
+    gpu_memory_limit: Optional[str],
+    offload_folder: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {}
+    if attn_implementation:
+        kwargs["attn_implementation"] = attn_implementation
+
+    normalized_device_map = (device_map or "auto").lower()
+    if normalized_device_map == "auto":
+        kwargs["device_map"] = "auto"
+    elif normalized_device_map == "cpu":
+        kwargs["device_map"] = {"": "cpu"}
+    elif normalized_device_map == "cuda":
+        if torch.cuda.is_available():
+            kwargs["device_map"] = {"": torch.cuda.current_device()}
+        else:
+            kwargs["device_map"] = {"": "cpu"}
+    else:
+        raise ValueError("qwen_device_map must be one of: cuda, auto, cpu")
+
+    if torch.cuda.is_available() and normalized_device_map == "auto":
+        kwargs["max_memory"] = {torch.cuda.current_device(): gpu_memory_limit or _default_gpu_memory_limit()}
+
+    if normalized_device_map == "auto" and offload_folder:
+        Path(offload_folder).mkdir(parents=True, exist_ok=True)
+        kwargs["offload_folder"] = offload_folder
+        kwargs["offload_buffers"] = True
+
+    return kwargs
+
+
+def _default_gpu_memory_limit() -> str:
+    free_bytes, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
+    # Leave headroom for bnb conversion buffers and allocator fragmentation during from_pretrained.
+    limit_gib = max(1, int((free_bytes * 0.88) // 1024**3))
+    return f"{limit_gib}GiB"
+
+
+def _log_cuda_memory(label: str) -> None:
+    if not torch.cuda.is_available():
+        print(f"[QWEN][MEM] {label}: cuda unavailable")
+        return
+
+    index = torch.cuda.current_device()
+    free_bytes, total_bytes = torch.cuda.mem_get_info(index)
+    allocated = torch.cuda.memory_allocated(index)
+    reserved = torch.cuda.memory_reserved(index)
+    print(
+        f"[QWEN][MEM] {label}: "
+        f"free={free_bytes / 1024**3:.2f}GiB total={total_bytes / 1024**3:.2f}GiB "
+        f"allocated={allocated / 1024**3:.2f}GiB reserved={reserved / 1024**3:.2f}GiB"
+    )
+
+
+def _log_loaded_model_state(model: Any) -> None:
+    device_map = getattr(model, "hf_device_map", None)
+    quantization_method = getattr(model, "quantization_method", None)
+    is_loaded_in_4bit = getattr(model, "is_loaded_in_4bit", False)
+    is_loaded_in_8bit = getattr(model, "is_loaded_in_8bit", False)
+    print(
+        "[QWEN] Loaded model state: "
+        f"is_loaded_in_4bit={is_loaded_in_4bit}, "
+        f"is_loaded_in_8bit={is_loaded_in_8bit}, "
+        f"quantization_method={quantization_method}, "
+        f"device_map={device_map}"
+    )
+    if hasattr(model, "get_memory_footprint"):
+        try:
+            footprint = model.get_memory_footprint()
+            print(f"[QWEN] Model memory footprint={footprint / 1024**3:.2f}GiB")
+        except Exception as err:
+            print(f"[QWEN] Could not compute model memory footprint: {err}")
+
+
+def _validate_batch(message: BatchedMessageCommander) -> None:
+    batch_size = len(message.instruction)
+    if not batch_size:
+        raise ValueError("BatchedMessageCommander must contain at least one instruction.")
+
+    for field_name in ("memory", "attributes", "history", "function"):
+        field_value = getattr(message, field_name)
+        if len(field_value) != batch_size:
+            raise ValueError(
+                f"{field_name} must have the same length as instruction "
+                f"({len(field_value)} != {batch_size})."
+            )
+
+
 THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
-INTENT_RE = re.compile(r"<intent>\s*(.*?)\s*</intent>", re.DOTALL)
-SAY_RE = re.compile(r"<say>\s*(.*?)\s*</say>", re.DOTALL)
-TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)  
+UNFINISHED_THINK_RE = re.compile(r"<think>.*$", re.DOTALL)
+TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
-def parse_blocks(text):
-    think_match = THINK_RE.search(text)
-    intent_match = INTENT_RE.search(text)
-    say_match = SAY_RE.search(text)
-    tool_match = TOOL_RE.search(text)
 
-    think = think_match.group(1).strip() if think_match else ""
-    intent = intent_match.group(1).strip() if intent_match else ""
-    say = say_match.group(1).strip() if say_match else ""
+def _apply_chat_template(tokenizer: Any, messages: List[Dict[str, Any]], tools: Any, enable_thinking: bool) -> str:
+    kwargs = {
+        "tools": tools,
+        "tokenize": False,
+        "add_generation_prompt": True,
+        "enable_thinking": enable_thinking,
+    }
+    try:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+    except TypeError as err:
+        if "enable_thinking" not in str(err):
+            raise
+        kwargs.pop("enable_thinking")
+        return tokenizer.apply_chat_template(messages, **kwargs)
 
-    # --- parse tool call ---
-    action = {}
+
+def parse_blocks(text: str) -> Dict[str, Any]:
+    raw_text = text.strip()
+    text_without_think = THINK_RE.sub("", raw_text)
+    text_without_think = UNFINISHED_THINK_RE.sub("", text_without_think).strip()
+
+    tool_match = TOOL_RE.search(text_without_think)
+    action: Any = {}
     if tool_match:
         raw = tool_match.group(1).strip()
-        try:
-            action = json.loads(raw)
-        except json.JSONDecodeError:
-            # hard failure: tool call must be exact
-            print("[PARSE ERROR] Invalid tool_call JSON")
-            action = {}
+        action = _normalize_action(_load_json_object(raw, label="tool_call"))
 
-    # --- sanity checks (optional but recommended) ---
-    if not intent:
-        print("[WARNING] Missing <intent> block")
-
-    if not say:
-        print("[WARNING] Missing <say> block")
+    say = TOOL_RE.sub("", text_without_think).strip()
+    say = re.sub(r"^\s*say\s*:\s*", "", say, flags=re.IGNORECASE).strip()
 
     return {
-        "reasoning": think,
-        "think": intent,
+        "think": "",
         "say": say,
         "action": action,
     }
+
+
+def _load_json_object(text: Any, label: str = "JSON", quiet: bool = False) -> Dict[str, Any]:
+    if not isinstance(text, str):
+        return text if isinstance(text, dict) else {}
+    try:
+        parsed = json.loads(text.strip())
+    except json.JSONDecodeError:
+        if not quiet:
+            print(f"[PARSE ERROR] Invalid {label}")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_action(action: Any) -> Dict[str, Any]:
+    if not isinstance(action, dict) or not action:
+        return {}
+    if isinstance(action.get("name"), str):
+        return {
+            "name": action["name"],
+            "arguments": action.get("arguments", {}) or {},
+        }
+
+    for value in action.values():
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            return {
+                "name": value["name"],
+                "arguments": value.get("arguments", {}) or {},
+            }
+    return {}
  
