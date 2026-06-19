@@ -1,1 +1,0 @@
-from .magma_memorizer import MagmaMemorizer

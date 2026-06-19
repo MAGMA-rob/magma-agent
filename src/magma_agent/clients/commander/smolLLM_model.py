@@ -25,7 +25,7 @@ Rules:
 BASE_SYSTEM_PROMPT = """You are a COMMANDER agent controlling a robot through optional tool calls.
 You operate in a long-horizon task, but you do NOT manage persistent memory yourself.
 
-A separate agent (the Memorizer) will handle memory updates.
+A separate agent (the TSM) will handle memory updates.
 Your role is to make the task state EXPLICIT so another agent can maintain memory correctly.
 
 You will receive three structured inputs:

@@ -1,2 +1,2 @@
 from .commander import BatchedMessageCommander, MessageCommander
-from .memorizer import MessageMemorizer, BatchedMessageMemorizer
+from .tsm import BatchedMessageTSM, MessageTSM

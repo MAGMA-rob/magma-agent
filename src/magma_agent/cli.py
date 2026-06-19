@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--commander-id")
-    parser.add_argument("--memorizer-id")
+    parser.add_argument("--tsm-id")
     parser.add_argument("--optimize-memory", action="store_true")
     parser.add_argument("--qwen-quantization", choices=("4bit", "8bit", "none"))
     parser.add_argument("--qwen-max-new-tokens", type=int)

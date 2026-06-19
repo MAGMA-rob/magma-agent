@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
 
 from .clients.commander import MagmaCommander, SmolLMCommander, QwenCommander, OSSCommander
-from .clients.memorizer import MagmaMemorizer
+from .clients.tsm import MagmaTSM
 
 def load_commander(
     commander_id : str,
@@ -25,9 +25,9 @@ def load_commander(
             print(f"[MAGMA AGENT] Loading Commander Model : {commander_id} with output format {commander_output}")
             return MagmaCommander(cpu_load=optimize_memory, model_id=commander_id, output_style=commander_output, overriding_chat_template_path=chat_template)
             
-def load_memorizer(memorizer_id : str, optimize_memory : bool):
-    if memorizer_id != "none":
-        print(f"[MAGMA AGENT] Loading Memorizer Model : {memorizer_id}")
-        return MagmaMemorizer(cpu_load=optimize_memory, model_id=memorizer_id)
+def load_tsm(tsm_id : str, optimize_memory : bool):
+    if tsm_id != "none":
+        print(f"[MAGMA AGENT] Loading TSM Model : {tsm_id}")
+        return MagmaTSM(cpu_load=optimize_memory, model_id=tsm_id)
 
     return None

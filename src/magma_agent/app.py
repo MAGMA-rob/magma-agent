@@ -7,8 +7,8 @@ from typing import List, Dict
 import torch
 
 from .config import Settings
-from .messages import BatchedMessageCommander, BatchedMessageMemorizer, MessageCommander, MessageMemorizer
-from .load import load_commander, load_memorizer
+from .messages import BatchedMessageCommander, BatchedMessageTSM, MessageCommander, MessageTSM
+from .load import load_commander, load_tsm
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -29,9 +29,9 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.commander = None
-        app.state.memorizer = None
+        app.state.tsm = None
         app.state.commander_lock = asyncio.Lock()
-        app.state.memorizer_lock = asyncio.Lock()
+        app.state.tsm_lock = asyncio.Lock()
 
         try:
             if settings.commander_id:
@@ -53,10 +53,10 @@ def create_app(settings: Settings) -> FastAPI:
                     },
                 )
 
-            if settings.memorizer_id:
-                app.state.memorizer = load_memorizer(settings.memorizer_id, settings.optimize_memory)
+            if settings.tsm_id:
+                app.state.tsm = load_tsm(settings.tsm_id, settings.optimize_memory)
 
-            if not app.state.commander and not app.state.memorizer:
+            if not app.state.commander and not app.state.tsm:
                 raise ValueError("At least one agent must be provided.")
 
             yield
@@ -64,9 +64,9 @@ def create_app(settings: Settings) -> FastAPI:
             if app.state.commander is not None:
                 del app.state.commander
                 app.state.commander = None
-            if app.state.memorizer is not None:
-                del app.state.memorizer
-                app.state.memorizer = None
+            if app.state.tsm is not None:
+                del app.state.tsm
+                app.state.tsm = None
             gc.collect()
             clear_cuda_cache()
 
@@ -127,32 +127,32 @@ def create_app(settings: Settings) -> FastAPI:
                     offload(commander)
         return out
         
-    @app.post("/update_memory")
-    async def update_memory(message: MessageMemorizer | BatchedMessageMemorizer):
-        if not app.state.memorizer:
-            raise ValueError(f"No memorizer loaded in this instance")
+    @app.post("/update_task_state")
+    async def update_task_state(message: MessageTSM | BatchedMessageTSM):
+        if not app.state.tsm:
+            raise ValueError(f"No TSM loaded in this instance")
         
-        memorizer = app.state.memorizer
+        tsm = app.state.tsm
 
-        async with app.state.memorizer_lock:
+        async with app.state.tsm_lock:
             if settings.optimize_memory:
-                memorizer.set_device("cuda")
+                tsm.set_device("cuda")
             try:
-                if isinstance(message, MessageMemorizer):
+                if isinstance(message, MessageTSM):
                     inf_mode = message.inference_mode
                     # Convert single message to batched format
-                    message = BatchedMessageMemorizer(
-                        memory=[message.memory],
-                        think = [message.think],
-                        say = [message.say],
-                        preserved_memory_indices = [message.preserved_memory_indices]
+                    message = BatchedMessageTSM(
+                        goals=[message.goals],
+                        rules=[message.rules],
+                        todo=[message.todo],
+                        instruction=[message.instruction],
                     )
-                    out = memorizer.process_batched_entry(message, inf_mode)[0]
+                    out = tsm.process_batched_entry(message, inf_mode)[0]
                 else:
-                    out = memorizer.process_batched_entry(message, False)
+                    out = tsm.process_batched_entry(message, False)
             finally:
                 if settings.optimize_memory:
-                    offload(memorizer)
+                    offload(tsm)
 
         return {"update":out}
 
@@ -160,7 +160,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def get_infos(payload : Dict):
         return {
             "commander" : settings.commander_id,
-            "memorizer" : settings.memorizer_id
+            "tsm" : settings.tsm_id
         }
 
     return app
