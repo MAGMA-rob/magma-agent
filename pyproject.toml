@@ -14,7 +14,7 @@ authors = [
 ]
 
 dependencies = [
-    "transformers",
+    "transformers==5.7.0",
     "uvicorn",
     "fastapi",
     "accelerate",
@@ -23,7 +23,6 @@ dependencies = [
     "openai-harmony",
     "pydantic_settings",
     "triton",
-    "kernels>=0.12.0"
 ]
 
 [project.scripts]
