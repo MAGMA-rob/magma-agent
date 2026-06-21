@@ -5,7 +5,7 @@ import re
 
 import torch
 
-from magma_agent.messages import BatchedMessageCommander
+from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles
 
@@ -101,7 +101,13 @@ Be aware that you can only have one object in your gripper. If you take an objec
 
 class OSSCommander(BaseCommander):
 
-    def __init__(self, model_id: str, cpu_load: bool = False) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        cpu_load: bool = False,
+        name: str = "commander",
+        endpoint: str = "/chat",
+    ) -> None:
         self._ensure_harmony_available()
         self.encoding = self._load_harmony_encoding()
         self.stop_token_ids = self.encoding.stop_tokens_for_assistant_actions()
@@ -109,6 +115,8 @@ class OSSCommander(BaseCommander):
         super().__init__(
             model_id,
             cpu_load=False,
+            name=name,
+            endpoint=endpoint,
             dtype="auto",
             load_kwargs={"device_map": "auto"},
             runtime_device_move=False,
@@ -134,7 +142,7 @@ class OSSCommander(BaseCommander):
                     instruction=message.instruction[i],
                     instruction_role=instruction_roles[i],
                     attributes=message.attributes[i],
-                    memory=message.memory[i],
+                    memory=get_memory_list(message.memory[i]),
                     tools=tools,
                 )
             )

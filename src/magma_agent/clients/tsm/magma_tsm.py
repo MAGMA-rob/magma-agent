@@ -2,7 +2,7 @@ from typing import List
 
 import torch  # type: ignore
 
-from magma_agent.messages import BatchedMessageTSM
+from .messages import BatchedMessageTSM
 
 from .base import TaskStateManager
 

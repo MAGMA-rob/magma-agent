@@ -3,12 +3,26 @@ from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
 import torch
 from abc import ABC, abstractmethod
 
-from magma_agent.messages import BatchedMessageTSM
+from magma_agent.clients.base import BaseModelClient
+from .messages import BatchedMessageTSM
 
 
-class TaskStateManager(ABC):
+class TaskStateManager(BaseModelClient, ABC):
 
-    def __init__(self, model_id, cpu_load: bool, tokenizer=None) -> None:
+    def __init__(
+        self,
+        model_id,
+        cpu_load: bool,
+        tokenizer=None,
+        name: str = "tsm",
+        endpoint: str = "/update_task_state",
+    ) -> None:
+        super().__init__(
+            name=name,
+            model_type="TSM",
+            model_id=model_id,
+            endpoint=endpoint,
+        )
         if tokenizer:
             self.tokenizer = tokenizer
         else:

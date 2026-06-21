@@ -1,22 +1,54 @@
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
+
+
+class ModelSettings(BaseModel):
+    name: str
+    type: str
+    model_id: str
+    endpoint: Optional[str] = None
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, endpoint: Optional[str]) -> Optional[str]:
+        if endpoint is not None and not endpoint.startswith("/"):
+            raise ValueError("Model endpoint must start with '/'.")
+        return endpoint
 
 
 class Settings(BaseSettings):
-    commander_id: Optional[str] = None
-    tsm_id: Optional[str] = None
-    commander_output_style: str = "qwen_format"
-    commander_chat_template: Optional[str] = None
+    models: List[ModelSettings] = Field(default_factory=list)
     optimize_memory: bool = False
-    qwen_quantization: str = "none"
-    qwen_max_new_tokens: int = 1500
-    qwen_attn_implementation: Optional[str] = "sdpa"
-    qwen_use_cache: bool = True
-    qwen_enable_thinking: bool = False
-    qwen_device_map: str = "auto"
-    qwen_gpu_memory_limit: Optional[str] = None
-    qwen_allow_cpu_offload: bool = False
-    qwen_offload_folder: str = "/tmp/magma_agent_qwen_offload"
     log_file: str = "server.log"
     host: str = "0.0.0.0"
     port: int = 8888
+    magma_models_config: Optional[str] = None
+    magma_models_json: Optional[str] = None
+
+    @model_validator(mode="after")
+    def load_models_from_json_sources(self) -> "Settings":
+        if self.models:
+            return self
+
+        raw_config = None
+        if self.magma_models_json:
+            raw_config = self.magma_models_json
+        elif self.magma_models_config:
+            raw_config = Path(self.magma_models_config).read_text(encoding="utf-8")
+
+        if raw_config is None:
+            return self
+
+        parsed = json.loads(raw_config)
+        if isinstance(parsed, dict):
+            parsed_models = parsed.get("models", [])
+        else:
+            parsed_models = parsed
+
+        self.models = [ModelSettings.model_validate(item) for item in parsed_models]
+        return self

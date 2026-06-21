@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 import json
 
-from magma_agent.messages import BatchedMessageCommander
+from .messages import BatchedMessageCommander
 
 
 def _stringify_content(content: Any) -> str:

@@ -19,18 +19,48 @@ You can use this package to define your own agents script or simply to use an al
 
 Check documentation
 
+## Model configuration
+
+`magma-agent` loads models from a single multi-model configuration. Provide it
+with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
+`--models-json`.
+
+```json
+{
+  "models": [
+    {
+      "name": "main_commander",
+      "type": "Commander",
+      "model_id": "path-or-hf-id",
+      "endpoint": "/chat",
+      "options": {
+        "output_style": "qwen_format"
+      }
+    },
+    {
+      "name": "task_state_manager",
+      "type": "TSM",
+      "model_id": "path-or-hf-id",
+      "endpoint": "/update_task_state"
+    }
+  ]
+}
+```
+
+`/get_infos` returns the loaded models as a `models` list with `name`, `type`,
+`endpoint`, and `model_id`.
+
 ## Large Qwen models
 
-Original Qwen commanders are loaded through a separate memory path so Magma
-commanders keep the default behavior. The useful knobs are:
+Qwen commander options are declared inside the model `options` object:
 
-- `QWEN_QUANTIZATION=4bit|8bit|none` or `--qwen-quantization`
-- `QWEN_MAX_NEW_TOKENS=1500` or `--qwen-max-new-tokens`
-- `QWEN_ATTN_IMPLEMENTATION=sdpa|flash_attention_2|eager` or `--qwen-attn-implementation`
-- `QWEN_USE_CACHE=false` or `--no-qwen-use-cache` as a last-resort memory tradeoff
-- `QWEN_DEVICE_MAP=auto|cuda|cpu` or `--qwen-device-map`
-- `QWEN_GPU_MEMORY_LIMIT=42GiB` or `--qwen-gpu-memory-limit`
-- `QWEN_ALLOW_CPU_OFFLOAD=true` or `--qwen-allow-cpu-offload`
+- `quantization_mode`: `4bit`, `8bit`, or `none`
+- `max_new_tokens`: default `1500`
+- `attn_implementation`: `sdpa`, `flash_attention_2`, or `eager`
+- `use_cache`: set to `false` as a last-resort memory tradeoff
+- `device_map`: `auto`, `cuda`, or `cpu`
+- `gpu_memory_limit`: for example `42GiB`
+- `allow_cpu_offload`: `true` or `false`
 
 For a 27B model on a 48 GB GPU, the Qwen path uses `device_map=auto` by
 default and leaves GPU headroom during loading to avoid out-of-memory spikes.

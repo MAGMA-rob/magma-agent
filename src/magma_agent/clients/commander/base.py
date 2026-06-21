@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 from transformers import AutoTokenizer, AutoModelForCausalLM #type: ignore
-import transformers #type: ignore
 import torch #type: ignore
 from typing import Any, List, Dict, Optional
 
-from magma_agent.messages import BatchedMessageCommander
+from magma_agent.clients.base import BaseModelClient
+from .messages import BatchedMessageCommander
 
 
-class BaseCommander(ABC):
+class BaseCommander(BaseModelClient, ABC):
 
     tokenizer : AutoTokenizer
     model : AutoModelForCausalLM
@@ -16,11 +16,19 @@ class BaseCommander(ABC):
         self,
         model_id : str,
         cpu_load : bool,
+        name: str = "commander",
+        endpoint: str = "/chat",
         dtype: Any = torch.float16,
         quantization = None,
         load_kwargs: Optional[Dict[str, Any]] = None,
         runtime_device_move: bool = True,
     ):
+        super().__init__(
+            name=name,
+            model_type="Commander",
+            model_id=model_id,
+            endpoint=endpoint,
+        )
         model_kwargs = {
             "dtype": dtype,
             "low_cpu_mem_usage": True,

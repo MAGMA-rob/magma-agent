@@ -2,7 +2,7 @@ from typing import Dict, List, Optional
 import torch
 import json, os, re
 
-from magma_agent.messages import BatchedMessageCommander
+from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles, map_chat_role
 
@@ -11,8 +11,16 @@ TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 class MagmaCommander(BaseCommander):
 
-    def __init__(self, model_id, output_style, overriding_chat_template_path : Optional[str], cpu_load : bool) -> None:
-        super().__init__(model_id, cpu_load)
+    def __init__(
+        self,
+        model_id,
+        output_style,
+        overriding_chat_template_path: Optional[str],
+        cpu_load: bool,
+        name: str = "commander",
+        endpoint: str = "/chat",
+    ) -> None:
+        super().__init__(model_id, cpu_load, name=name, endpoint=endpoint)
         if overriding_chat_template_path is not None:
             with open(overriding_chat_template_path, "r", encoding="utf-8") as f:
                 chat_template_content = f.read()
@@ -42,7 +50,7 @@ class MagmaCommander(BaseCommander):
 
         for i in range(batch_size):
             memory = "Memory:\n" 
-            for mem in message.memory[i]:
+            for mem in get_memory_list(message.memory[i]):
                 memory += f"- {mem}\n"
 
             messages= []

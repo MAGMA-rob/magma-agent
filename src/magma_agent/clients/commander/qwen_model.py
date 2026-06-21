@@ -3,7 +3,7 @@ import torch
 import json, re
 from pathlib import Path
 
-from magma_agent.messages import BatchedMessageCommander
+from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles, map_chat_role
 
@@ -89,6 +89,8 @@ class QwenCommander(BaseCommander):
         self,
         model_name : str,
         cpu_load: bool = False,
+        name: str = "commander",
+        endpoint: str = "/chat",
         quantization_mode: str = "4bit",
         max_new_tokens: int = 1500,
         attn_implementation: Optional[str] = "sdpa",
@@ -128,6 +130,8 @@ class QwenCommander(BaseCommander):
         super().__init__(
             model_name,
             cpu_load=False,
+            name=name,
+            endpoint=endpoint,
             dtype=compute_dtype,
             quantization=quantization,
             load_kwargs=load_kwargs,
@@ -152,8 +156,9 @@ class QwenCommander(BaseCommander):
         for i in range(batch_size):
             
             mem_str = "Memory:\n"
-            if len(message.memory[i]) > 0:
-                for mem in message.memory[i]:
+            memory_list = get_memory_list(message.memory[i])
+            if len(memory_list) > 0:
+                for mem in memory_list:
                     mem_str += f"- {mem}\n"
             else:
                 mem_str += "empty\n"

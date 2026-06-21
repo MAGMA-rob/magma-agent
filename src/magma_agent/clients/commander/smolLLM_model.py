@@ -2,7 +2,7 @@ from typing import Dict, List, Optional
 import torch
 import json, os, re
 
-from magma_agent.messages import BatchedMessageCommander
+from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles, map_chat_role
 
@@ -87,7 +87,7 @@ class SmolLMCommander(BaseCommander):
 
         for i in range(len(message.memory)):
             memory = "Memory:\n" 
-            for mem in message.memory[i]:
+            for mem in get_memory_list(message.memory[i]):
                 memory += f"- {mem}\n"
 
             
