@@ -9,7 +9,7 @@ from .history import get_history_content, get_instruction_roles, map_chat_role
 
 from transformers import BitsAndBytesConfig
 
-BASE_SYSTEM_PROMPT = """You are MAGMA's single-agent robot commander.
+BASE_SYSTEM_PROMPT = """You are MAGMA's robot commander.
 
 You control a robot through optional function calls. Your job is to choose the next best response given:
 - the current instruction or status update
@@ -30,8 +30,11 @@ Tool policy:
 - Use only tools declared in the current tool list.
 - Tool arguments must be valid JSON and must match the declared schema.
 - Ground every argument in the provided context. Do not invent object names, robot names, quantities, or locations.
+- Every tool call must select exactly one robot using a robot name from task attributes `known_robots`.
 - If you call a tool, write exactly one tool block after the user-facing text:
-<tool_call>{"name":"<func_name>","arguments":{"param":"value"}}</tool_call>
+- Correct tool-call format:
+<tool_call>{"<robot_name>":{"name":"<func_name>","arguments":{"param":"value"}}}</tool_call>
+- Never output the flat format {"name":"<func_name>","arguments":{...}}.
 - If no tool is needed, do not output a tool block.
 
 User-facing text policy:
@@ -407,11 +410,16 @@ def _normalize_action(action: Any) -> Dict[str, Any]:
             "arguments": action.get("arguments", {}) or {},
         }
 
+    normalized_action = {}
     for value in action.values():
         if isinstance(value, dict) and isinstance(value.get("name"), str):
-            return {
-                "name": value["name"],
-                "arguments": value.get("arguments", {}) or {},
-            }
-    return {}
+            continue
+        return {}
+
+    for robot_name, value in action.items():
+        normalized_action[robot_name] = {
+            "name": value["name"],
+            "arguments": value.get("arguments", {}) or {},
+        }
+    return normalized_action
  

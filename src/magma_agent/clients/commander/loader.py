@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from . import MagmaCommander, OSSCommander, QwenCommander, SmolLMCommander
+from . import MagmaCommander, OSSCommander, QwenCommander
 
 
 def load_commander(
@@ -27,15 +27,6 @@ def load_commander(
             gpu_memory_limit=options.get("gpu_memory_limit"),
             allow_cpu_offload=options.get("allow_cpu_offload", False),
             offload_folder=options.get("offload_folder", "/tmp/magma_agent_qwen_offload"),
-        )
-
-    if "smollm" in normalized_model_id:
-        print(f"[MAGMA AGENT] Loading SmolLM Commander Model: {model_id}")
-        return SmolLMCommander(
-            model_id,
-            cpu_load=optimize_memory,
-            name=name,
-            endpoint=endpoint,
         )
 
     if "oss" in normalized_model_id or "gpt_oss" in normalized_model_id:

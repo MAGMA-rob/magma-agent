@@ -25,7 +25,7 @@ from openai_harmony import (
 
 
 
-SINGLE_AGENT_INSTRUCTIONS = """You are MAGMA's single-agent robot commander.
+SINGLE_AGENT_INSTRUCTIONS = """You are MAGMA's robot commander.
 
 You control a robot through optional Harmony function calls. Your job is to choose the next best response given:
 - the current instruction or status update
@@ -46,6 +46,8 @@ Tool policy:
 - Use only tools declared in the current tool list.
 - Tool arguments must be valid JSON and must match the declared schema.
 - Ground every argument in the provided context. Do not invent object names, robot names, quantities, or locations.
+- Every tool call must select exactly one robot using the required `target_robot` argument.
+- `target_robot` must be one of the robot names listed in task attributes `known_robots`.
 - Put function calls in the commentary channel using the provided Harmony tool-calling mechanism.
 - Do not write tool-call JSON as plain text in the final channel.
 
@@ -135,7 +137,7 @@ class OSSCommander(BaseCommander):
         self._validate_batch(message)
 
         for i in range(len(message.instruction)):
-            tools = self._build_tool_descriptions(message.function[i])
+            tools = self._build_tool_descriptions(message.function[i], message.attributes[i])
             conversations.append(
                 self._build_conversation(
                     history=message.history[i],
@@ -243,7 +245,10 @@ class OSSCommander(BaseCommander):
         return Conversation.from_messages(messages)
 
     @staticmethod
-    def _build_tool_descriptions(functions: Sequence[Dict[str, Any]]) -> List[Any]:
+    def _build_tool_descriptions(
+        functions: Sequence[Dict[str, Any]],
+        attributes: Any,
+    ) -> List[Any]:
         tools = []
         for tool in functions:
             name = tool.get("name")
@@ -252,6 +257,7 @@ class OSSCommander(BaseCommander):
 
             parameters = tool.get("parameters", tool.get("arguments"))
             parameters = _normalize_tool_parameters(parameters, tool.get("optional", []))
+            parameters = _add_target_robot_parameter(parameters, _known_robot_names(attributes))
 
             tools.append(
                 ToolDescription.new(
@@ -631,6 +637,35 @@ def _normalize_tool_parameters(parameters: Any, optional: Sequence[str] | None =
     return schema
 
 
+def _known_robot_names(attributes: Any) -> List[str]:
+    if not isinstance(attributes, dict):
+        return []
+    known_robots = attributes.get("known_robots", [])
+    if not isinstance(known_robots, list):
+        return []
+    return [robot for robot in known_robots if isinstance(robot, str) and robot]
+
+
+def _add_target_robot_parameter(parameters: Dict[str, Any], known_robots: Sequence[str]) -> Dict[str, Any]:
+    schema = dict(parameters)
+    properties = dict(schema.get("properties", {}))
+    target_robot_schema: Dict[str, Any] = {
+        "type": "string",
+        "description": "Robot that must execute this tool call. Use one value from task attributes known_robots.",
+    }
+    if known_robots:
+        target_robot_schema["enum"] = list(known_robots)
+
+    properties["target_robot"] = target_robot_schema
+    schema["properties"] = properties
+
+    required = list(schema.get("required", []))
+    if "target_robot" not in required:
+        required.append("target_robot")
+    schema["required"] = required
+    return schema
+
+
 def _json_schema_type(value: Any) -> str:
     if isinstance(value, type):
         value = value.__name__
@@ -673,20 +708,38 @@ def _tool_action_from_message(recipient: str, text: str) -> Dict[str, Any]:
     tool_name = recipient.rsplit(".", 1)[-1]
 
     if arguments.get("name") and "arguments" in arguments:
-        return {
-            "name": arguments.get("name"),
-            "arguments": arguments.get("arguments", {}),
-        }
+        return _wrap_action_with_target_robot(
+            str(arguments.get("name")),
+            arguments.get("arguments", {}),
+            arguments.get("target_robot"),
+        )
 
     if tool_name == recipient and "name" in arguments:
-        return {
-            "name": arguments.get("name"),
-            "arguments": arguments.get("arguments", {}),
-        }
+        return _wrap_action_with_target_robot(
+            str(arguments.get("name")),
+            arguments.get("arguments", {}),
+            arguments.get("target_robot"),
+        )
 
+    target_robot = arguments.pop("target_robot", None)
+    return _wrap_action_with_target_robot(tool_name, arguments, target_robot)
+
+
+def _wrap_action_with_target_robot(
+    tool_name: str,
+    arguments: Any,
+    target_robot: Any,
+) -> Dict[str, Any]:
+    if isinstance(target_robot, str) and target_robot:
+        return {
+            target_robot: {
+                "name": tool_name,
+                "arguments": arguments if isinstance(arguments, dict) else {},
+            }
+        }
     return {
         "name": tool_name,
-        "arguments": arguments,
+        "arguments": arguments if isinstance(arguments, dict) else {},
     }
 
 
@@ -753,9 +806,13 @@ def _normalize_action_list(action: Any) -> List[Dict[str, Any]]:
         return [{"name": action["name"], "arguments": action.get("arguments", {}) or {}}]
 
     actions = []
-    for value in action.values():
+    for robot_name, value in action.items():
         if isinstance(value, dict) and isinstance(value.get("name"), str):
-            actions.append({"name": value["name"], "arguments": value.get("arguments", {}) or {}})
+            actions.append({
+                "name": value["name"],
+                "arguments": value.get("arguments", {}) or {},
+                "target_robot": robot_name,
+            })
     return actions
 
 
@@ -765,7 +822,10 @@ def _actions_to_harmony_tool_calls(actions: Sequence[Dict[str, Any]]) -> List[An
         name = action.get("name")
         if not name:
             continue
-        arguments = action.get("arguments", {}) or {}
+        arguments = dict(action.get("arguments", {}) or {})
+        target_robot = action.get("target_robot")
+        if isinstance(target_robot, str) and target_robot:
+            arguments["target_robot"] = target_robot
         messages.append(
             Message.from_role_and_content(Role.ASSISTANT, json.dumps(arguments, ensure_ascii=True))
             .with_channel("commentary")
