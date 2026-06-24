@@ -6,7 +6,8 @@ from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
 from .history import get_history_content, get_instruction_roles, map_chat_role
 
-TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+UNFINISHED_TOOL_RE = re.compile(r"<tool_call>\s*(.*)$", re.DOTALL)
 
 
 class MagmaCommander(BaseCommander):
@@ -125,7 +126,7 @@ class MagmaCommander(BaseCommander):
                     responses.append(json.loads(response_text))
                 except:
                     print(f"[COMMANDER] Bad model output")
-                    responses.append({"think":response_text, "say":"", "action":"X"})
+                    responses.append({"think":"", "say":"", "action":response_text})
             else:
                 st = parse_blocks(response_text)
                 responses.append(st)
@@ -142,7 +143,7 @@ def parse_blocks(text):
     after_think = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
     # 3. extract tool_call JSON
-    tool_match = TOOL_RE.search(after_think)
+    tool_match = TOOL_RE.search(after_think) or UNFINISHED_TOOL_RE.search(after_think)
     if tool_match:
         tool_call = tool_match.group(1).strip()
         try:
@@ -153,6 +154,7 @@ def parse_blocks(text):
 
         # 4. extract the "say" text (everything between </think> and <tool_call>)
         say = _strip_terminal_tokens(TOOL_RE.sub("", after_think))
+        say = _strip_terminal_tokens(UNFINISHED_TOOL_RE.sub("", say))
     else:
         # Backward-compatible recovery for checkpoints that output: say + raw JSON.
         action, say = _split_raw_trailing_json(after_think)
@@ -178,6 +180,10 @@ def _split_raw_trailing_json(text):
             parsed_candidates.append((start, start + offset, parsed))
 
     if not parsed_candidates:
+        marker = re.search(r"\btool_call\s*:\s*", text, flags=re.IGNORECASE)
+        if marker:
+            say = text[:marker.start()].strip()
+            return text[marker.end():].strip(), say
         return {}, text.strip()
 
     clean_terminal_candidates = [

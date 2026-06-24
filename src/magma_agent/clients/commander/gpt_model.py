@@ -504,7 +504,7 @@ class OSSCommander(BaseCommander):
     def _messages_to_commander_response(entries: Sequence[Any], sequence_mode: bool) -> Dict[str, Any]:
         final_parts = []
         commentary_parts = []
-        actions = []
+        actions: List[Any] = []
 
         for entry in entries:
             entry_dict = entry.to_dict()
@@ -546,7 +546,7 @@ class OSSCommander(BaseCommander):
         if not say and not action:
             print(f"[OSS COMMANDER] Harmony parse failed: {err}")
             self._debug_harmony_completion(completion_ids)
-            say = text.strip()
+            action = text.strip()
         elif _harmony_debug_enabled():
             print(f"[OSS COMMANDER][HARMONY DEBUG] Harmony parse failed but fallback recovered: {err}")
             self._debug_harmony_completion(completion_ids)
@@ -703,8 +703,14 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
-def _tool_action_from_message(recipient: str, text: str) -> Dict[str, Any]:
-    arguments = _parse_json_object(text, quiet=False)
+def _tool_action_from_message(recipient: str, text: str) -> Any:
+    try:
+        arguments = json.loads(text)
+    except json.JSONDecodeError:
+        print("[OSS COMMANDER] Invalid tool call JSON")
+        return text
+    if not isinstance(arguments, dict):
+        return text
     tool_name = recipient.rsplit(".", 1)[-1]
 
     if arguments.get("name") and "arguments" in arguments:
@@ -887,7 +893,7 @@ def _normalize_harmony_completion_text(text: str) -> str:
     return re.sub(r"(?:<\|constrain\|>\s*)+json", "json", text)
 
 
-def _extract_tool_actions(text: str) -> List[Dict[str, Any]]:
+def _extract_tool_actions(text: str) -> List[Any]:
     pattern = re.compile(
         r"to=([A-Za-z0-9_.-]+).*?<\|message\|>(.*?)(?=<\|call\|>|<\|end\|>|<\|start\|>|$)",
         re.DOTALL,

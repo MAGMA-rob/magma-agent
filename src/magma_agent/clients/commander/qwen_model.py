@@ -349,7 +349,8 @@ def _validate_batch(message: BatchedMessageCommander) -> None:
 
 THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 UNFINISHED_THINK_RE = re.compile(r"<think>.*$", re.DOTALL)
-TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+UNFINISHED_TOOL_RE = re.compile(r"<tool_call>\s*(.*)$", re.DOTALL)
 
 
 def _apply_chat_template(tokenizer: Any, messages: List[Dict[str, Any]], tools: Any, enable_thinking: bool) -> str:
@@ -373,13 +374,16 @@ def parse_blocks(text: str) -> Dict[str, Any]:
     text_without_think = THINK_RE.sub("", raw_text)
     text_without_think = UNFINISHED_THINK_RE.sub("", text_without_think).strip()
 
-    tool_match = TOOL_RE.search(text_without_think)
+    tool_match = TOOL_RE.search(text_without_think) or UNFINISHED_TOOL_RE.search(text_without_think)
     action: Any = {}
     if tool_match:
         raw = tool_match.group(1).strip()
-        action = _normalize_action(_load_json_object(raw, label="tool_call"))
-
+        parsed_action = _normalize_action(_load_json_object(raw, label="tool_call"))
+        action = parsed_action or raw
+        print(f"[QWEN COMMANDER] Raw tool: {raw!r}")
+        print(f"[QWEN COMMANDER] Returned tool: {action!r} ({type(action).__name__})")
     say = TOOL_RE.sub("", text_without_think).strip()
+    say = UNFINISHED_TOOL_RE.sub("", say).strip()
     say = re.sub(r"^\s*say\s*:\s*", "", say, flags=re.IGNORECASE).strip()
 
     return {
