@@ -25,5 +25,8 @@ dependencies = [
     "triton",
 ]
 
+[tool.setuptools.package-data]
+magma_agent = ["default_chat_template/*.jinja"]
+
 [project.scripts]
 magma_agent = "magma_agent.__main__:main"

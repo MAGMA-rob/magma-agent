@@ -41,7 +41,7 @@ with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
       "name": "task_state_manager",
       "type": "TSM",
       "model_id": "path-or-hf-id",
-      "endpoint": "/update_task_state"
+      "endpoint": "/update_representation"
     }
   ]
 }

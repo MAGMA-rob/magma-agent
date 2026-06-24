@@ -10,8 +10,9 @@ def load_tsm(
     optimize_memory: bool,
     options: Dict[str, Any],
 ):
-    if options:
-        print(f"[MAGMA AGENT] Ignoring unsupported TSM options: {sorted(options)}")
+    unsupported_options = sorted(set(options) - {"chat_template"})
+    if unsupported_options:
+        print(f"[MAGMA AGENT] Ignoring unsupported TSM options: {unsupported_options}")
 
     print(f"[MAGMA AGENT] Loading TSM Model: {model_id}")
     return MagmaTSM(
@@ -19,4 +20,5 @@ def load_tsm(
         cpu_load=optimize_memory,
         name=name,
         endpoint=endpoint,
+        overriding_chat_template_path=options.get("chat_template"),
     )

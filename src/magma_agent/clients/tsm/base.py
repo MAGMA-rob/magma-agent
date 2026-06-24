@@ -1,4 +1,5 @@
-from typing import List
+from pathlib import Path
+from typing import Any, List
 from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
 import torch
 from abc import ABC, abstractmethod
@@ -15,7 +16,7 @@ class TaskStateManager(BaseModelClient, ABC):
         cpu_load: bool,
         tokenizer=None,
         name: str = "tsm",
-        endpoint: str = "/update_task_state",
+        endpoint: str = "/update_representation",
     ) -> None:
         super().__init__(
             name=name,
@@ -30,6 +31,13 @@ class TaskStateManager(BaseModelClient, ABC):
                 model_id,
                 padding_side="left",
             )
+        if self.tokenizer.chat_template is None:
+            default_template_path = (
+                Path(__file__).resolve().parents[2]
+                / "default_chat_template"
+                / "tsm.jinja"
+            )
+            self.tokenizer.chat_template = default_template_path.read_text(encoding="utf-8")
 
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
@@ -55,5 +63,5 @@ class TaskStateManager(BaseModelClient, ABC):
         self,
         message: BatchedMessageTSM,
         inference_mode: bool,
-    ) -> List[str]:
+    ) -> List[Any]:
         raise NotImplementedError("Must be defined in child class")

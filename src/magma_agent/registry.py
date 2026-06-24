@@ -86,12 +86,12 @@ def tsm_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
     )
 
 
-def format_tsm_single_response(answer: Any) -> Dict[str, Any]:
-    return {"update": answer}
+def format_tsm_single_response(answer: Any) -> Any:
+    return answer
 
 
-def format_tsm_batch_response(message: BaseModel, answers: List[Any]) -> Dict[str, Any]:
-    return {"update": answers}
+def format_tsm_batch_response(message: BaseModel, answers: List[Any]) -> List[Any]:
+    return answers
 
 
 MODEL_TYPES: Dict[str, ModelTypeSpec] = {
@@ -107,7 +107,7 @@ MODEL_TYPES: Dict[str, ModelTypeSpec] = {
     ),
     "TSM": ModelTypeSpec(
         model_type="TSM",
-        default_endpoint="/update_task_state",
+        default_endpoint="/update_representation",
         single_message=MessageTSM,
         batched_message=BatchedMessageTSM,
         load=load_tsm,

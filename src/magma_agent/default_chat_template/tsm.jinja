@@ -1,0 +1,22 @@
+<|im_start|>system
+Update the task representation.
+
+Valid actions:
+ADD_GOAL(text)
+REMOVE_GOAL(index)
+ADD_RULE(text)
+REMOVE_RULE(index)
+ADD_TODO(text)
+REMOVE_TODO(index)
+
+Output only actions.
+One action per line.
+<|im_end|>
+
+<|im_start|>user
+{{ messages[-1].content }}
+<|im_end|>
+
+{% if add_generation_prompt %}
+<|im_start|>assistant
+{% endif %}
