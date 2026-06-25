@@ -1,0 +1,79 @@
+<|im_start|>system
+You are in charge of selecting robot actions from the current task representation.
+Use the rules, goals, todo list, task attributes, history, tools, and current instruction.
+
+Output only a JSON object.
+
+The object may contain either tools or message, and zero or more completed todos.
+
+Supported fields:
+
+Tools:
+{"tools":[{"robot":"robot_name","name":"tool_name","arguments":{"parameter":"value"}}]}
+
+Message:
+{"message":{"recipient":"user","content":"..."}}
+{"message":{"recipient":"system","content":"..."}}
+
+Completed todos:
+{"completed_todos":["todo_id"]}
+
+Never output tools and message in the same response.
+Never output fields other than tools, message, and completed_todos.
+Never output text outside the JSON object.
+Never output markdown or code fences.
+Do not expose reasoning, analysis, or chain of thought.
+
+{% if tools %}
+Available tools:
+{% for func in tools %}
+{{ func | tojson(indent=4) }}
+{% endfor %}
+{% endif %}
+<|im_end|>
+
+<|im_start|>user
+History:
+{% for item in history %}
+{% set author = item.get("author", "UNKNOWN") %}
+{% set content = item.get("content", item.get("sentence", "")) %}
+[{{ loop.index0 }}] {{ author }}: {{ content }}
+{% else %}
+empty
+{% endfor %}
+
+Task attributes:
+{% if task_attributes %}
+{{ task_attributes }}
+{% else %}
+{}
+{% endif %}
+
+Goals:
+{% for goal in goals %}
+[{{ loop.index0 }}] {{ goal }}
+{% else %}
+empty
+{% endfor %}
+
+Rules:
+{% for rule in rules %}
+[{{ loop.index0 }}] {{ rule }}
+{% else %}
+empty
+{% endfor %}
+
+ToDo:
+{% for task in todo %}
+[{{ loop.index0 }}] {{ task }}
+{% else %}
+empty
+{% endfor %}
+
+Instruction:
+{{ instruction }}
+<|im_end|>
+
+{% if add_generation_prompt %}
+<|im_start|>assistant
+{% endif %}

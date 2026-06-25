@@ -42,6 +42,12 @@ with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
       "type": "TSM",
       "model_id": "path-or-hf-id",
       "endpoint": "/update_representation"
+    },
+    {
+      "name": "dispatcher",
+      "type": "Dispatcher",
+      "model_id": "path-or-hf-id",
+      "endpoint": "/dispatch"
     }
   ]
 }
@@ -52,10 +58,10 @@ with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
 
 ## Large Qwen models
 
-Qwen commander options are declared inside the model `options` object:
+Qwen commander and dispatcher options are declared inside the model `options` object:
 
 - `quantization_mode`: `4bit`, `8bit`, or `none`
-- `max_new_tokens`: default `1500`
+- `max_new_tokens`: default `1500` for Commander, `600` for Dispatcher
 - `attn_implementation`: `sdpa`, `flash_attention_2`, or `eager`
 - `use_cache`: set to `false` as a last-resort memory tradeoff
 - `device_map`: `auto`, `cuda`, or `cpu`

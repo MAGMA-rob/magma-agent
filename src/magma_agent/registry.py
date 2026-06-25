@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from .clients.base import BaseModelClient
 from .clients.commander.loader import load_commander
 from .clients.commander.messages import BatchedMessageCommander, MessageCommander
+from .clients.dispatcher.loader import load_dispatcher
+from .clients.dispatcher.messages import BatchedMessageDispatcher, MessageDispatcher
 from .clients.tsm.loader import load_tsm
 from .clients.tsm.messages import BatchedMessageTSM, MessageTSM
 from .config import ModelSettings
@@ -44,7 +46,11 @@ def format_commander_single_response(answer: Any) -> Any:
     return answer
 
 
-def format_commander_batch_response(message: BaseModel, answers: List[Any]) -> Dict[str, List[Any]]:
+def format_tool_batch_response(
+    message: BaseModel,
+    answers: List[Any],
+    model_label: str,
+) -> Dict[str, List[Any]]:
     out: Dict[str, List[Any]] = {
         "think": [],
         "say": [],
@@ -65,12 +71,35 @@ def format_commander_batch_response(message: BaseModel, answers: List[Any]) -> D
         action = answer.get("action", {})
         if isinstance(action, list):
             print(
-                "[COMMANDER] Model returned a sequence but prediction_mode is set to tool_select"
+                f"[{model_label}] Model returned a sequence but prediction_mode is set to tool_select"
             )
             action = action[0] if action else {}
         out["action"].append(action)
 
     return out
+
+
+def format_commander_batch_response(message: BaseModel, answers: List[Any]) -> Dict[str, List[Any]]:
+    return format_tool_batch_response(message, answers, "COMMANDER")
+
+
+def dispatcher_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
+    dispatcher_message = message
+    return (
+        BatchedMessageDispatcher(
+            memory=[dispatcher_message.memory],
+            attributes=[dispatcher_message.attributes],
+            history=[dispatcher_message.history],
+            function=[dispatcher_message.function],
+            instruction=[dispatcher_message.instruction],
+            prediction_mode=dispatcher_message.prediction_mode,
+        ),
+        dispatcher_message.inference_mode,
+    )
+
+
+def format_dispatcher_batch_response(message: BaseModel, answers: List[Any]) -> List[Any]:
+    return answers
 
 
 def tsm_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
@@ -114,6 +143,16 @@ MODEL_TYPES: Dict[str, ModelTypeSpec] = {
         single_to_batch=tsm_single_to_batch,
         format_single_response=format_tsm_single_response,
         format_batch_response=format_tsm_batch_response,
+    ),
+    "Dispatcher": ModelTypeSpec(
+        model_type="Dispatcher",
+        default_endpoint="/dispatch",
+        single_message=MessageDispatcher,
+        batched_message=BatchedMessageDispatcher,
+        load=load_dispatcher,
+        single_to_batch=dispatcher_single_to_batch,
+        format_single_response=format_commander_single_response,
+        format_batch_response=format_dispatcher_batch_response,
     ),
 }
 
