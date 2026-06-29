@@ -1,0 +1,9 @@
+{
+  "models": [
+    {
+      "name": "commander",
+      "type": "Commander",
+      "model_id": "models/corl/qwen-4b"
+    }
+  ]
+}

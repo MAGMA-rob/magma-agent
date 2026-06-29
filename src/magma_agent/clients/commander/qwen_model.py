@@ -380,8 +380,6 @@ def parse_blocks(text: str) -> Dict[str, Any]:
         raw = tool_match.group(1).strip()
         parsed_action = _normalize_action(_load_json_object(raw, label="tool_call"))
         action = parsed_action or raw
-        print(f"[QWEN COMMANDER] Raw tool: {raw!r}")
-        print(f"[QWEN COMMANDER] Returned tool: {action!r} ({type(action).__name__})")
     say = TOOL_RE.sub("", text_without_think).strip()
     say = UNFINISHED_TOOL_RE.sub("", say).strip()
     say = re.sub(r"^\s*say\s*:\s*", "", say, flags=re.IGNORECASE).strip()

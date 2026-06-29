@@ -1,13 +1,14 @@
 {
   "models": [
     {
-      "name": "main_commander",
-      "type": "Commander",
-      "model_id": "models/corl/qwen-4b",
-      "endpoint": "/chat",
-      "options": {
-        "output_style": "qwen_format"
-      }
+      "name": "task_update_tsm",
+      "type": "TSM",
+      "model_id": "models/task-update-v0"
+    },
+    {
+      "name": "qwen_dispatcher",
+      "type": "Dispatcher",
+      "model_id": "models/corl/qwen-4b"
     }
   ]
 }

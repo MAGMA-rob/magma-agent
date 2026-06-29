@@ -44,7 +44,6 @@ You are given:
 * Recover from previous execution failures whenever possible.
 * Ask the user for clarification instead of guessing when required information is missing.
 
-
 ## Output
 
 Output **only** a JSON object.
@@ -112,6 +111,7 @@ A list of completed todo identifiers.
 * Do not generate fields other than `tools`, `message`, and `completed_todos`.
 * Do not expose reasoning, analysis, or chain of thought.
 * If dispatching a tool can make progress, dispatch a tool instead of sending a message.
+* `completed_todos` must only be used for a todo that you have completed, not that you are launching. Meaning you must wait for the tool return before calling it.
 
 ## Valid exemples:
 ```json
@@ -225,10 +225,8 @@ class QwenDispatcher(BaseDispatcher):
             prompt_user = (
                 "Task attributes: "
                 f"{json.dumps(message.attributes[i], ensure_ascii=True)}\n\n"
-                f"Goals:\n{_format_numbered_list(representation['goals'])}\n\n"
                 f"Rules:\n{_format_numbered_list(representation['rules'])}\n\n"
                 f"ToDo:\n{_format_numbered_list(representation['todo'])}\n\n"
-                f"Instruction: {message.instruction[i]}"
             )
 
             messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
@@ -280,6 +278,12 @@ class QwenDispatcher(BaseDispatcher):
 
         responses = []
         for i in range(len(formatted_inputs)):
+            if i==0:
+                print("--------") 
+                print(self.tokenizer.decode(
+                    output[i],
+                    skip_special_tokens=True,
+                ).strip())
             generated_tokens = output[i][prompt_length:]
             response_text = self.tokenizer.decode(
                 generated_tokens,
