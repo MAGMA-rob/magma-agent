@@ -4,9 +4,17 @@
       "name": "main_commander",
       "type": "Commander",
       "model_id": "models/corl/qwen-4b",
-      "endpoint": "/chat",
       "options": {
         "output_style": "qwen_format"
+      }
+    }
+  ],
+  "agents": [
+    {
+      "name": "history_reactive",
+      "type": "history_reactive",
+      "models": {
+        "commander": "main_commander"
       }
     }
   ]

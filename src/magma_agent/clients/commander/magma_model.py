@@ -123,13 +123,31 @@ class MagmaCommander(BaseCommander):
 
             if self.output_style == "json":
                 try:
-                    responses.append(json.loads(response_text))
-                except:
+                    parsed_response = json.loads(response_text)
+                    valid = isinstance(parsed_response, dict)
+                except json.JSONDecodeError:
                     print(f"[COMMANDER] Bad model output")
-                    responses.append({"think":"", "say":"", "action":response_text})
+                    parsed_response = {
+                        "think": "",
+                        "say": "",
+                        "action": response_text,
+                    }
+                    valid = False
             else:
-                st = parse_blocks(response_text)
-                responses.append(st)
+                parsed_response = parse_blocks(response_text)
+                valid = (
+                    isinstance(parsed_response, dict)
+                    and isinstance(
+                        parsed_response.get("action", {}),
+                        (dict, list),
+                    )
+                )
+            self.log_prompt_exchange(
+                formatted_inputs[i],
+                response_text,
+                valid,
+            )
+            responses.append(parsed_response)
 
         return responses
 

@@ -220,8 +220,20 @@ class QwenCommander(BaseCommander):
         for i in range(len(formatted_inputs)):
             generated_tokens = output[i][prompt_length:]
             response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            st = parse_blocks(response_text)
-            responses.append(st)
+            parsed_response = parse_blocks(response_text)
+            valid = (
+                isinstance(parsed_response, dict)
+                and isinstance(
+                    parsed_response.get("action", {}),
+                    (dict, list),
+                )
+            )
+            self.log_prompt_exchange(
+                formatted_inputs[i],
+                response_text,
+                valid,
+            )
+            responses.append(parsed_response)
 
         return responses
 

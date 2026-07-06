@@ -1,6 +1,6 @@
 <|im_start|>system
 You are in charge of selecting robot actions from the current task representation.
-Use the rules, goals, todo list, task attributes, history, tools, and current instruction.
+Use the rules, todo list, task attributes, history, and tools.
 
 Output only a JSON object.
 
@@ -34,13 +34,7 @@ Available tools:
 
 <|im_start|>user
 History:
-{% for item in history %}
-{% set author = item.get("author", "UNKNOWN") %}
-{% set content = item.get("content", item.get("sentence", "")) %}
-[{{ loop.index0 }}] {{ author }}: {{ content }}
-{% else %}
-empty
-{% endfor %}
+{{history}}
 
 Task attributes:
 {% if task_attributes %}
@@ -49,30 +43,19 @@ Task attributes:
 {}
 {% endif %}
 
-Goals:
-{% for goal in goals %}
-[{{ loop.index0 }}] {{ goal }}
-{% else %}
-empty
-{% endfor %}
-
 Rules:
 {% for rule in rules %}
-[{{ loop.index0 }}] {{ rule }}
+- {{ rule }}
 {% else %}
 empty
 {% endfor %}
 
 ToDo:
 {% for task in todo %}
-[{{ loop.index0 }}] {{ task }}
+- {{ task }}
 {% else %}
 empty
 {% endfor %}
-
-Instruction:
-{{ instruction }}
-<|im_end|>
 
 {% if add_generation_prompt %}
 <|im_start|>assistant

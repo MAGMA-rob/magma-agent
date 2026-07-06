@@ -1,9 +1,52 @@
+import json
 from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field, field_validator
 
 
 REPRESENTATION_FIELDS = ("rules", "goals", "todo")
+
+
+def format_dispatcher_history(history: List[Dict[str, Any]]) -> str:
+    if not history:
+        return "empty"
+
+    lines = []
+    for item in history:
+        author = str(item.get("author", "UNKNOWN")).upper()
+        content = item.get("content", item.get("sentence", ""))
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                pass
+
+        if author == "MODEL" and isinstance(content, dict):
+            for robot, tool_call in content.items():
+                if not isinstance(tool_call, dict):
+                    continue
+                normalized_call = {
+                    "robot": robot,
+                    "name": tool_call.get("name", ""),
+                    "arguments": tool_call.get("arguments", {}),
+                }
+                lines.append(
+                    "TOOL: "
+                    + json.dumps(normalized_call, ensure_ascii=False)
+                )
+            continue
+
+        if author == "SYSTEM":
+            lines.append(
+                "RESULT: " + json.dumps(content, ensure_ascii=False)
+            )
+            continue
+
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        lines.append(f"{author}: {content}")
+
+    return "\n".join(lines) if lines else "empty"
 
 
 def get_representation_field(memory: Dict[str, Any], field_name: str) -> List[str]:
@@ -26,9 +69,7 @@ class MessageDispatcher(BaseModel):
     attributes: Dict[str, Any]
     history: List[Dict[str, Any]]
     function: List[Dict[str, Any]]
-    instruction: str
     inference_mode: bool = False
-    prediction_mode: str = "tool_select"
 
     @field_validator("memory")
     @classmethod
@@ -43,8 +84,6 @@ class BatchedMessageDispatcher(BaseModel):
     attributes: List[Dict[str, Any]]
     history: List[List[Dict[str, Any]]]
     function: List[List[Dict[str, Any]]]
-    instruction: List[str]
-    prediction_mode: str = "tool_select"
 
     @field_validator("memory")
     @classmethod

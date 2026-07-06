@@ -8,6 +8,7 @@ from .base import BaseDispatcher
 from .messages import (
     BatchedMessageDispatcher,
     REPRESENTATION_FIELDS,
+    format_dispatcher_history,
     get_representation_field,
 )
 from .parsing import parse_dispatcher_output
@@ -46,18 +47,18 @@ class MagmaDispatcher(BaseDispatcher):
         inference_mode: bool,
     ) -> List[Union[Dict[str, Any], str]]:
         formatted_inputs = []
-        batch_size = len(message.instruction)
+        batch_size = len(message.memory)
 
         if not batch_size:
             raise ValueError(
-                "BatchedMessageDispatcher must contain at least one instruction."
+                "BatchedMessageDispatcher must contain at least one entry."
             )
 
-        for field_name in ("memory", "attributes", "history", "function"):
+        for field_name in ("attributes", "history", "function"):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
-                    f"{field_name} must have the same length as instruction "
+                    f"{field_name} must have the same batch length "
                     f"({len(field_value)} != {batch_size})."
                 )
 
@@ -70,14 +71,12 @@ class MagmaDispatcher(BaseDispatcher):
 
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": message.instruction[i]}],
+                    [{}],
                     tools=message.function[i],
                     task_attributes=message.attributes[i],
                     rules=representation["rules"],
-                    goals=representation["goals"],
                     todo=representation["todo"],
-                    history=message.history[i],
-                    instruction=message.instruction[i],
+                    history=format_dispatcher_history(message.history[i]),
                     tokenize=False,
                     add_generation_prompt=True,
                 )
@@ -137,6 +136,12 @@ class MagmaDispatcher(BaseDispatcher):
                 generated_tokens,
                 skip_special_tokens=True,
             ).strip()
-            responses.append(parse_dispatcher_output(response_text))
+            parsed_response = parse_dispatcher_output(response_text)
+            self.log_prompt_exchange(
+                formatted_inputs[i],
+                response_text,
+                isinstance(parsed_response, dict),
+            )
+            responses.append(parsed_response)
 
         return responses

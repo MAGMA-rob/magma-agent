@@ -21,34 +21,49 @@ class ModelSettings(BaseModel):
         return endpoint
 
 
+class AgentSettings(BaseModel):
+    name: str
+    type: str
+    models: Dict[str, str]
+
+
 class Settings(BaseSettings):
     models: List[ModelSettings] = Field(default_factory=list)
+    agents: List[AgentSettings] = Field(default_factory=list)
     optimize_memory: bool = False
     log_file: str = "server.log"
     host: str = "0.0.0.0"
     port: int = 8888
-    magma_models_config: Optional[str] = None
-    magma_models_json: Optional[str] = None
+    prompt_log_dir: Optional[str] = None
+    config_path: Optional[str] = None
+    config_json: Optional[str] = None
 
     @model_validator(mode="after")
     def load_models_from_json_sources(self) -> "Settings":
-        if self.models:
+        if self.models and self.agents:
             return self
 
         raw_config = None
-        if self.magma_models_json:
-            raw_config = self.magma_models_json
-        elif self.magma_models_config:
-            raw_config = Path(self.magma_models_config).read_text(encoding="utf-8")
+        if self.config_json:
+            raw_config = self.config_json
+        elif self.config_path:
+            raw_config = Path(self.config_path).read_text(encoding="utf-8")
 
         if raw_config is None:
             return self
 
         parsed = json.loads(raw_config)
-        if isinstance(parsed, dict):
-            parsed_models = parsed.get("models", [])
-        else:
-            parsed_models = parsed
+        if not isinstance(parsed, dict):
+            raise ValueError("Agent configuration must contain 'models' and 'agents'.")
 
-        self.models = [ModelSettings.model_validate(item) for item in parsed_models]
+        self.models = [
+            ModelSettings.model_validate(item)
+            for item in parsed.get("models", [])
+        ]
+        self.agents = [
+            AgentSettings.model_validate(item)
+            for item in parsed.get("agents", [])
+        ]
+        if self.prompt_log_dir is None:
+            self.prompt_log_dir = parsed.get("prompt_log_dir")
         return self

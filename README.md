@@ -21,9 +21,8 @@ Check documentation
 
 ## Model configuration
 
-`magma-agent` loads models from a single multi-model configuration. Provide it
-with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
-`--models-json`.
+`magma-agent` loads models and agents from a single configuration. Provide it
+with `CONFIG_PATH`, `CONFIG_JSON`, `--config`, or `--config-json`.
 
 ```json
 {
@@ -32,7 +31,6 @@ with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
       "name": "main_commander",
       "type": "Commander",
       "model_id": "path-or-hf-id",
-      "endpoint": "/chat",
       "options": {
         "output_style": "qwen_format"
       }
@@ -40,21 +38,52 @@ with `MAGMA_MODELS_CONFIG`, `MAGMA_MODELS_JSON`, `--models-config`, or
     {
       "name": "task_state_manager",
       "type": "TSM",
-      "model_id": "path-or-hf-id",
-      "endpoint": "/update_representation"
+      "model_id": "path-or-hf-id"
     },
     {
       "name": "dispatcher",
       "type": "Dispatcher",
-      "model_id": "path-or-hf-id",
-      "endpoint": "/dispatch"
+      "model_id": "path-or-hf-id"
+    }
+  ],
+  "agents": [
+    {
+      "name": "history_reactive",
+      "type": "history_reactive",
+      "models": {
+        "commander": "main_commander"
+      }
+    },
+    {
+      "name": "task_state_reactive",
+      "type": "task_state_reactive",
+      "models": {
+        "tsm": "task_state_manager",
+        "dispatcher": "dispatcher"
+      }
     }
   ]
 }
 ```
 
-`/get_infos` returns the loaded models as a `models` list with `name`, `type`,
-`endpoint`, and `model_id`.
+Agents are called through the single `POST /v1/responses` endpoint.
+
+## Prompt debug logs
+
+Set `prompt_log_dir` in the JSON configuration, `PROMPT_LOG_DIR` in the
+environment, or pass `--prompt-log-dir` to write one timestamped file per
+generated response. Each file contains the fully formatted prompt, the raw
+decoded model response, and the final agent validation status.
+
+```bash
+python -m magma_agent \
+  --config config.json \
+  --prompt-log-dir logs/prompts
+```
+
+The Docker launch script enables this by default at `/app/logs/prompts`.
+The existing `/app/logs` volume makes the files available on the host in
+`logs/prompts`.
 
 ## Large Qwen models
 

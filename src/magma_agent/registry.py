@@ -91,8 +91,6 @@ def dispatcher_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
             attributes=[dispatcher_message.attributes],
             history=[dispatcher_message.history],
             function=[dispatcher_message.function],
-            instruction=[dispatcher_message.instruction],
-            prediction_mode=dispatcher_message.prediction_mode,
         ),
         dispatcher_message.inference_mode,
     )

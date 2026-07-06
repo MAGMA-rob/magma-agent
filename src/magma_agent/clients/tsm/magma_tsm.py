@@ -89,12 +89,18 @@ class MagmaTSM(TaskStateManager):
             output = self.model.generate(**inputs, **generation_options)
 
         responses = []
-        for generated_output in output:
+        for index, generated_output in enumerate(output):
             response_text = self.tokenizer.decode(
                 generated_output[input_length:],
                 skip_special_tokens=True,
             ).strip()
-            responses.append(parse_task_state_update(response_text))
+            parsed_response = parse_task_state_update(response_text)
+            self.log_prompt_exchange(
+                formatted_inputs[index],
+                response_text,
+                isinstance(parsed_response, list),
+            )
+            responses.append(parsed_response)
 
         return responses
 

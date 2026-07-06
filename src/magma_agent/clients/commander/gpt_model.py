@@ -165,7 +165,23 @@ class OSSCommander(BaseCommander):
 
         for i in range(len(prefill_ids)):
             completion_ids = output[i][prompt_length:].tolist()
-            responses.append(self._parse_completion(completion_ids, sequence_mode=sequence_mode))
+            parsed_response = self._parse_completion(
+                completion_ids,
+                sequence_mode=sequence_mode,
+            )
+            valid = (
+                isinstance(parsed_response, dict)
+                and isinstance(
+                    parsed_response.get("action", {}),
+                    (dict, list),
+                )
+            )
+            self.log_prompt_exchange(
+                self.encoding.decode(prefill_ids[i]),
+                self.encoding.decode(completion_ids),
+                valid,
+            )
+            responses.append(parsed_response)
 
         return responses
 

@@ -1,11 +1,9 @@
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-import json
 
 import torch  # type: ignore
 
-from magma_agent.clients.commander.history import get_history_content, map_chat_role
 from magma_agent.clients.commander.qwen_model import (
-    _apply_chat_template,
     _best_compute_dtype,
     _build_load_kwargs,
     _build_quantization_config,
@@ -17,6 +15,7 @@ from .base import BaseDispatcher
 from .messages import (
     BatchedMessageDispatcher,
     REPRESENTATION_FIELDS,
+    format_dispatcher_history,
     get_representation_field,
 )
 from .parsing import parse_dispatcher_output
@@ -187,6 +186,14 @@ class QwenDispatcher(BaseDispatcher):
             load_kwargs=load_kwargs,
             runtime_device_move=False,
         )
+        default_template_path = (
+            Path(__file__).resolve().parents[2]
+            / "default_chat_template"
+            / "dispatcher.jinja"
+        )
+        self.tokenizer.chat_template = default_template_path.read_text(
+            encoding="utf-8"
+        )
         _log_loaded_model_state(self.model)
         _log_cuda_memory("after Qwen dispatcher load")
         if cpu_load:
@@ -201,18 +208,18 @@ class QwenDispatcher(BaseDispatcher):
         inference_mode: bool,
     ) -> List[Union[Dict[str, Any], str]]:
         formatted_inputs = []
-        batch_size = len(message.instruction)
+        batch_size = len(message.memory)
 
         if not batch_size:
             raise ValueError(
-                "BatchedMessageDispatcher must contain at least one instruction."
+                "BatchedMessageDispatcher must contain at least one entry."
             )
 
-        for field_name in ("memory", "attributes", "history", "function"):
+        for field_name in ("attributes", "history", "function"):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
-                    f"{field_name} must have the same length as instruction "
+                    f"{field_name} must have the same batch length "
                     f"({len(field_value)} != {batch_size})."
                 )
 
@@ -222,29 +229,16 @@ class QwenDispatcher(BaseDispatcher):
                 field_name: get_representation_field(memory, field_name)
                 for field_name in REPRESENTATION_FIELDS
             }
-            prompt_user = (
-                "Task attributes: "
-                f"{json.dumps(message.attributes[i], ensure_ascii=True)}\n\n"
-                f"Goals:\n{_format_numbered_list(representation['goals'])}\n\n"
-                f"Rules:\n{_format_numbered_list(representation['rules'])}\n\n"
-                f"ToDo:\n{_format_numbered_list(representation['todo'])}\n\n"
-                f"Instruction: {message.instruction[i]}"
-            )
-
-            messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
-            for previous_message in message.history[i]:
-                messages.append({
-                    "role": map_chat_role(previous_message.get("author")),
-                    "content": get_history_content(previous_message),
-                })
-            messages.append({"role": "user", "content": prompt_user})
-
             formatted_inputs.append(
-                _apply_chat_template(
-                    self.tokenizer,
-                    messages,
+                self.tokenizer.apply_chat_template(
+                    [{}],
                     tools=message.function[i],
-                    enable_thinking=self.enable_thinking,
+                    task_attributes=message.attributes[i],
+                    rules=representation["rules"],
+                    todo=representation["todo"],
+                    history=format_dispatcher_history(message.history[i]),
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
             )
 
@@ -285,12 +279,12 @@ class QwenDispatcher(BaseDispatcher):
                 generated_tokens,
                 skip_special_tokens=True,
             ).strip()
-            responses.append(parse_dispatcher_output(response_text))
+            parsed_response = parse_dispatcher_output(response_text)
+            self.log_prompt_exchange(
+                formatted_inputs[i],
+                response_text,
+                isinstance(parsed_response, dict),
+            )
+            responses.append(parsed_response)
 
         return responses
-
-
-def _format_numbered_list(values: List[str]) -> str:
-    if not values:
-        return "empty"
-    return "\n".join(f"[{i}] {value}" for i, value in enumerate(values))
