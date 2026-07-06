@@ -1,0 +1,18 @@
+{
+  "models": [
+    {
+      "name": "commander",
+      "type": "Commander",
+      "model_id": "models/corl/qwen-4b"
+    }
+  ],
+  "agents": [
+    {
+      "name": "history_reactive",
+      "type": "history_reactive",
+      "models": {
+        "commander": "commander"
+      }
+    }
+  ]
+}
