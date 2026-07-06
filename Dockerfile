@@ -31,6 +31,9 @@ COPY pyproject.toml .
 RUN pip install --upgrade pip
 COPY src ./src
 
+COPY 3rdparty/magma-core-dev /packages/magma-core
+# Waiting for proper installation from github
+RUN pip install /packages/magma-core
 
 RUN pip install .
 

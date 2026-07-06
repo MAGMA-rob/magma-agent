@@ -3,12 +3,12 @@
     {
       "name": "task_update_tsm",
       "type": "TSM",
-      "model_id": "models/task-update-v0"
+      "model_id": "models/tsm-v0"
     },
     {
-      "name": "qwen_dispatcher",
+      "name": "magma_dispatcher",
       "type": "Dispatcher",
-      "model_id": "models/corl/qwen-4b"
+      "model_id": "models/dispatcher-v0"
     }
   ],
   "agents": [
@@ -17,7 +17,7 @@
       "type": "task_state_reactive",
       "models": {
         "tsm": "task_update_tsm",
-        "dispatcher": "qwen_dispatcher"
+        "dispatcher": "magma_dispatcher"
       }
     }
   ]

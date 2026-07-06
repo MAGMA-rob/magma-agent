@@ -1,5 +1,6 @@
 logs/
 /models/
+3rdparty/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
