@@ -112,8 +112,13 @@ class MagmaTSM(TaskStateManager):
         instruction: str,
     ) -> str:
         user_prompt = "Goals:\n"
-        for i, goal in enumerate(goals):
-            user_prompt += f"[{i}] {goal}\n"
+        active_goal_index = 0
+        for goal in goals:
+            if goal.startswith("[completed] "):
+                user_prompt += f"{goal}\n"
+                continue
+            user_prompt += f"[{active_goal_index}] {goal}\n"
+            active_goal_index += 1
 
         user_prompt += "\nRules:\n"
         for i, rule in enumerate(rules):

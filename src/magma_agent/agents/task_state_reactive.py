@@ -30,6 +30,7 @@ class TaskStateReactiveInput(BaseModel):
     function: List[Dict[str, Any]] = Field(default_factory=list)
     instruction: TaskStateInstruction
     completed_todos: List[str] = Field(default_factory=list)
+    completed_goals: List[str] = Field(default_factory=list)
     inference_mode: bool = False
     tsm: Optional[Dict[str, Any]] = None
 
@@ -66,6 +67,12 @@ def apply_task_state_update(
         "add_todo": ("todo", "add"),
         "remove_todo": ("todo", "remove"),
     }
+    removals: Dict[str, List[int]] = {
+        field_name: []
+        for field_name in REPRESENTATION_FIELDS
+    }
+    additions: List[tuple[str, str]] = []
+
     for action in update:
         if not isinstance(action, dict):
             raise TypeError(f"TSM action must be a dict, got {type(action).__name__}")
@@ -80,15 +87,27 @@ def apply_task_state_update(
         if operation == "add":
             if not isinstance(content, str):
                 raise TypeError(f"{action_type} content must be a string")
-            representation[field_name].append(content)
-        else:
-            if not isinstance(content, int):
-                raise TypeError(f"{action_type} content must be an integer index")
-            if content < 0 or content >= len(representation[field_name]):
-                raise IndexError(
-                    f"{action_type} index {content} is out of range for {field_name}"
-                )
-            representation[field_name].pop(content)
+            additions.append((field_name, content))
+            continue
+
+        if not isinstance(content, int):
+            raise TypeError(f"{action_type} content must be an integer index")
+        if content < 0 or content >= len(representation[field_name]):
+            raise IndexError(
+                f"{action_type} index {content} is out of range for {field_name}"
+            )
+        if content in removals[field_name]:
+            raise ValueError(
+                f"{action_type} index {content} is removed more than once"
+            )
+        removals[field_name].append(content)
+
+    for field_name, indices in removals.items():
+        for index in sorted(indices, reverse=True):
+            representation[field_name].pop(index)
+    for field_name, content in additions:
+        representation[field_name].append(content)
+
     return normalize_representation(representation)
 
 
@@ -248,6 +267,23 @@ class TaskStateReactiveAgent(BaseAgent):
             zip(request.inputs, parsed_inputs)
         ):
             input_representation = normalize_representation(agent_input.memory)
+            completed_todos = list(
+                input_representation.get("completed_todos", [])
+            )
+            for raw_todo_id in agent_input.completed_todos:
+                try:
+                    todo_id = int(raw_todo_id)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= todo_id < len(input_representation["todo"]):
+                    todo = input_representation["todo"][todo_id]
+                    if todo.startswith("[done] "):
+                        todo = todo.removeprefix("[done] ")
+                        input_representation["todo"][todo_id] = todo
+                    if todo not in completed_todos:
+                        completed_todos.append(todo)
+            input_representation["completed_todos"] = completed_todos
+
             if agent_input.tsm is not None:
                 supplied_state = agent_input.tsm
                 state_candidates.append(
@@ -269,22 +305,6 @@ class TaskStateReactiveAgent(BaseAgent):
 
             if agent_input.instruction.type == "tool_result":
                 representation = deepcopy(input_representation)
-                completed_todos = list(
-                    representation.get("completed_todos", [])
-                )
-                for raw_todo_id in agent_input.completed_todos:
-                    try:
-                        todo_id = int(raw_todo_id)
-                    except (TypeError, ValueError):
-                        continue
-                    if 0 <= todo_id < len(representation["todo"]):
-                        todo = representation["todo"][todo_id]
-                        if todo.startswith("[done] "):
-                            todo = todo.removeprefix("[done] ")
-                            representation["todo"][todo_id] = todo
-                        if todo not in completed_todos:
-                            completed_todos.append(todo)
-                representation["completed_todos"] = completed_todos
                 state_candidates.append(
                     {
                         "input_index": input_index,
@@ -299,10 +319,32 @@ class TaskStateReactiveAgent(BaseAgent):
                 continue
 
             for state_index in range(request.candidate_counts["tsm"]):
-                tsm_sources.append((input_index, entry.id, state_index))
-                tsm_goals.append(input_representation["goals"].copy())
+                tsm_sources.append(
+                    (
+                        input_index,
+                        entry.id,
+                        state_index,
+                        deepcopy(input_representation),
+                    )
+                )
+                goals = [
+                    f"[completed] {goal}"
+                    for goal in agent_input.completed_goals
+                ]
+                goals.extend(
+                    f"[current] {goal}" if index == 0 else goal
+                    for index, goal in enumerate(
+                        input_representation["goals"]
+                    )
+                )
+                tsm_goals.append(goals)
                 tsm_rules.append(input_representation["rules"].copy())
-                tsm_todo.append(input_representation["todo"].copy())
+                tsm_todo.append([
+                    f"[done] {todo}"
+                    if todo in completed_todos
+                    else todo
+                    for todo in input_representation["todo"]
+                ])
                 tsm_instructions.append(agent_input.instruction.content)
 
         if tsm_sources:
@@ -323,15 +365,25 @@ class TaskStateReactiveAgent(BaseAgent):
                 )
             tsm_validities = []
             for source, raw_update in zip(tsm_sources, raw_updates):
-                input_index, source_id, state_index = source
-                input_representation = normalize_representation(
-                    parsed_inputs[input_index].memory
-                )
+                (
+                    input_index,
+                    source_id,
+                    state_index,
+                    input_representation,
+                ) = source
                 try:
                     representation = apply_task_state_update(
                         input_representation,
                         raw_update,
                     )
+                    representation["completed_todos"] = [
+                        todo
+                        for todo in input_representation.get(
+                            "completed_todos",
+                            [],
+                        )
+                        if todo in representation["todo"]
+                    ]
                     error = None
                     tsm_validities.append(True)
                 except (TypeError, ValueError, IndexError) as exception:
@@ -360,6 +412,16 @@ class TaskStateReactiveAgent(BaseAgent):
         dispatcher_functions = []
 
         for state in state_candidates:
+            agent_input = parsed_inputs[state["input_index"]]
+            completed_goals = list(agent_input.completed_goals)
+            for goal in state["input_representation"]["goals"]:
+                if (
+                    goal not in state["representation"]["goals"]
+                    and goal not in completed_goals
+                ):
+                    completed_goals.append(goal)
+            state["completed_goals"] = completed_goals
+
             if state.get("error") is not None:
                 invalid_results.append(
                     (
@@ -380,12 +442,12 @@ class TaskStateReactiveAgent(BaseAgent):
                                 "reason": state["error"],
                                 "raw_output": state["raw_output"],
                             },
+                            "completed_goals": completed_goals,
                         },
                     )
                 )
                 continue
 
-            agent_input = parsed_inputs[state["input_index"]]
             for dispatcher_index in range(
                 request.candidate_counts["dispatcher"]
             ):
@@ -441,6 +503,7 @@ class TaskStateReactiveAgent(BaseAgent):
                 output = {
                     "tsm": task_state,
                     "dispatcher": dispatcher["raw_output"],
+                    "completed_goals": state["completed_goals"],
                 }
                 valid = True
                 dispatcher_validities.append(True)
@@ -455,6 +518,7 @@ class TaskStateReactiveAgent(BaseAgent):
                         "reason": str(error),
                         "raw_output": raw_output,
                     },
+                    "completed_goals": state["completed_goals"],
                 }
             results.append(
                 (
