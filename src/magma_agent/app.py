@@ -141,6 +141,7 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/get_infos")
     async def get_infos():
         return {
+            "human": False,
             "agents": [
                 {
                     "name": agent_settings.name,
