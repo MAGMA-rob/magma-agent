@@ -9,6 +9,7 @@ from .messages import (
     BatchedMessageDispatcher,
     REPRESENTATION_FIELDS,
     format_dispatcher_history,
+    get_permanent_rules,
     get_representation_field,
 )
 from .parsing import parse_dispatcher_output
@@ -74,6 +75,7 @@ class MagmaDispatcher(BaseDispatcher):
                     [{}],
                     tools=message.function[i],
                     task_attributes=message.attributes[i],
+                    permanent_rules=get_permanent_rules(memory),
                     rules=representation["rules"],
                     todo=representation["todo"],
                     history=format_dispatcher_history(message.history[i]),

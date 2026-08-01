@@ -34,7 +34,7 @@ class MagmaTSM(TaskStateManager):
         if not batch_size:
             raise ValueError("BatchedMessageTSM must contain at least one instruction.")
 
-        for field_name in ("goals", "rules", "todo"):
+        for field_name in ("permanent_rules", "goals", "rules", "todo"):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
@@ -45,6 +45,7 @@ class MagmaTSM(TaskStateManager):
         formatted_inputs = []
         for i in range(batch_size):
             user_prompt = self._format_task_state(
+                message.permanent_rules[i],
                 message.goals[i],
                 message.rules[i],
                 message.todo[i],
@@ -53,6 +54,7 @@ class MagmaTSM(TaskStateManager):
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": user_prompt}],
+                    permanent_rules=message.permanent_rules[i],
                     rules=message.rules[i],
                     goals=message.goals[i],
                     todo=message.todo[i],
@@ -106,12 +108,21 @@ class MagmaTSM(TaskStateManager):
 
     @staticmethod
     def _format_task_state(
+        permanent_rules: List[str],
         goals: List[str],
         rules: List[str],
         todo: List[str],
         instruction: str,
     ) -> str:
-        user_prompt = "Goals:\n"
+        user_prompt = (
+            "Permanent rules (immutable guidance; never add, remove, or modify):\n"
+        )
+        for rule in permanent_rules:
+            user_prompt += f"- {rule}\n"
+        if not permanent_rules:
+            user_prompt += "empty\n"
+
+        user_prompt += "\nGoals:\n"
         active_goal_index = 0
         for goal in goals:
             if goal.startswith("[completed] "):

@@ -16,6 +16,7 @@ from .messages import (
     BatchedMessageDispatcher,
     REPRESENTATION_FIELDS,
     format_dispatcher_history,
+    get_permanent_rules,
     get_representation_field,
 )
 from .parsing import parse_dispatcher_output
@@ -28,6 +29,7 @@ Your job is to choose the next useful actions to progress the current task.
 You are given:
 
 * Rules that must always be respected.
+* Permanent rules containing immutable guidance that must never be changed.
 * A todo list describing the remaining work.
 * Task attributes describing the current environment.
 * A compact execution history containing previous tool calls and their results.
@@ -234,6 +236,7 @@ class QwenDispatcher(BaseDispatcher):
                     [{}],
                     tools=message.function[i],
                     task_attributes=message.attributes[i],
+                    permanent_rules=get_permanent_rules(memory),
                     rules=representation["rules"],
                     todo=representation["todo"],
                     history=format_dispatcher_history(message.history[i]),

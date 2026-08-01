@@ -7,6 +7,19 @@ from pydantic import BaseModel, Field, field_validator
 REPRESENTATION_FIELDS = ("rules", "goals", "todo")
 
 
+def get_permanent_rules(memory: Dict[str, Any]) -> List[str]:
+    permanent_rules = memory.get("memory_list", [])
+    if permanent_rules is None:
+        return []
+    if not isinstance(permanent_rules, list):
+        raise ValueError("Dispatcher memory['memory_list'] must be a list.")
+    if any(not isinstance(rule, str) for rule in permanent_rules):
+        raise ValueError(
+            "Dispatcher memory['memory_list'] must contain only strings."
+        )
+    return permanent_rules
+
+
 def format_dispatcher_history(history: List[Dict[str, Any]]) -> str:
     if not history:
         return "empty"
@@ -74,6 +87,7 @@ class MessageDispatcher(BaseModel):
     @field_validator("memory")
     @classmethod
     def validate_memory(cls, memory: Dict[str, Any]) -> Dict[str, Any]:
+        get_permanent_rules(memory)
         for field_name in REPRESENTATION_FIELDS:
             get_representation_field(memory, field_name)
         return memory
@@ -89,6 +103,7 @@ class BatchedMessageDispatcher(BaseModel):
     @classmethod
     def validate_memory(cls, memory: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for entry in memory:
+            get_permanent_rules(entry)
             for field_name in REPRESENTATION_FIELDS:
                 get_representation_field(entry, field_name)
         return memory

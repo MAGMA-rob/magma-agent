@@ -1,6 +1,7 @@
 <|im_start|>system
 You are in charge of selecting robot actions from the current task representation.
-Use the rules, todo list, task attributes, history, and tools.
+Use the permanent rules, rules, todo list, task attributes, history, and tools.
+Permanent rules are immutable guidance. Always follow them and never modify them.
 
 Output only a JSON object.
 
@@ -42,6 +43,13 @@ Task attributes:
 {% else %}
 {}
 {% endif %}
+
+Permanent rules (immutable):
+{% for rule in permanent_rules %}
+- {{ rule }}
+{% else %}
+empty
+{% endfor %}
 
 Rules:
 {% for rule in rules %}

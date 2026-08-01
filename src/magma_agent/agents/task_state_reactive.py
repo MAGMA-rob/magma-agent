@@ -258,6 +258,7 @@ class TaskStateReactiveAgent(BaseAgent):
 
         state_candidates: list[Dict[str, Any]] = []
         tsm_sources = []
+        tsm_permanent_rules = []
         tsm_goals = []
         tsm_rules = []
         tsm_todo = []
@@ -327,6 +328,16 @@ class TaskStateReactiveAgent(BaseAgent):
                         deepcopy(input_representation),
                     )
                 )
+                permanent_rules = input_representation.get("memory_list", [])
+                if permanent_rules is None:
+                    permanent_rules = []
+                if not isinstance(permanent_rules, list):
+                    raise TypeError("memory['memory_list'] must be a list")
+                if any(not isinstance(rule, str) for rule in permanent_rules):
+                    raise TypeError(
+                        "memory['memory_list'] must contain only strings"
+                    )
+                tsm_permanent_rules.append(permanent_rules.copy())
                 goals = [
                     f"[completed] {goal}"
                     for goal in agent_input.completed_goals
@@ -351,6 +362,7 @@ class TaskStateReactiveAgent(BaseAgent):
             raw_updates = await model_call(
                 self.tsm,
                 BatchedMessageTSM(
+                    permanent_rules=tsm_permanent_rules,
                     goals=tsm_goals,
                     rules=tsm_rules,
                     todo=tsm_todo,

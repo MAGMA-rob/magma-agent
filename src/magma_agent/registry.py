@@ -104,6 +104,7 @@ def tsm_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
     tsm_message = message
     return (
         BatchedMessageTSM(
+            permanent_rules=[tsm_message.permanent_rules],
             goals=[tsm_message.goals],
             rules=[tsm_message.rules],
             todo=[tsm_message.todo],
