@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
-from .history import get_history_content, get_instruction_roles, map_chat_role
+from .history import format_history_content, get_instruction_roles, map_chat_role
 
 from transformers import BitsAndBytesConfig
 
@@ -172,9 +172,10 @@ class QwenCommander(BaseCommander):
                 system_message.copy()
             ]
             for previous_mess in message.history[i]:
+                role = map_chat_role(previous_mess.get("author"))
                 messages.append({
-                    "role": map_chat_role(previous_mess.get("author")),
-                    "content": get_history_content(previous_mess),
+                    "role": role,
+                    "content": format_history_content(previous_mess, role),
                 })
 
             messages.append({

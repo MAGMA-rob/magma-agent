@@ -4,7 +4,7 @@ import json, os, re
 
 from .messages import BatchedMessageCommander, get_memory_list
 from .base import BaseCommander
-from .history import get_history_content, get_instruction_roles, map_chat_role
+from .history import format_history_content, get_instruction_roles, map_chat_role
 
 TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 UNFINISHED_TOOL_RE = re.compile(r"<tool_call>\s*(.*)$", re.DOTALL)
@@ -50,34 +50,25 @@ class MagmaCommander(BaseCommander):
                 )
 
         for i in range(batch_size):
-            memory = "Memory:\n" 
-            for mem in get_memory_list(message.memory[i]):
-                memory += f"- {mem}\n"
+            permanent_rules = get_memory_list(message.memory[i])
 
             messages= []
 
             for previous_mess in message.history[i]:
+                role = map_chat_role(previous_mess.get("author"))
                 messages.append({
-                    "role": map_chat_role(
-                        previous_mess.get("author"),
-                        system_role="status",
-                        model_role="model",
-                    ),
-                    "content": get_history_content(previous_mess),
+                    "role": role,
+                    "content": format_history_content(previous_mess, role),
                 })
 
             messages.append({
-                "role": map_chat_role(
-                    instruction_roles[i],
-                    system_role="status",
-                    model_role="model",
-                ),
+                "role": map_chat_role(instruction_roles[i]),
                 "content": message.instruction[i],
             })
             formatted_inputs.append(self.tokenizer.apply_chat_template(
                     messages,
                     tools=message.function[i],
-                    long_memory=memory,
+                    permanent_rules=permanent_rules,
                     task_attributes=message.attributes[i],
                     tokenize=False,
                     add_generation_prompt=True

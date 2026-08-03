@@ -16,6 +16,30 @@ def get_history_content(message: Dict[str, Any]) -> str:
     return _stringify_content(message.get("content", message.get("sentence", "")))
 
 
+def format_history_content(message: Dict[str, Any], role: str) -> str:
+    content = get_history_content(message)
+    if role != "assistant" or "<tool_call>" in content:
+        return content
+
+    try:
+        output = json.loads(content)
+    except json.JSONDecodeError:
+        return content
+    if not isinstance(output, dict) or not ({"say", "action"} & output.keys()):
+        return content
+
+    say = _stringify_content(output.get("say", "")).strip()
+    action = output.get("action", {})
+    if not action:
+        return say
+    return (
+        say
+        + "<tool_call>"
+        + json.dumps(action, ensure_ascii=False)
+        + "</tool_call>"
+    )
+
+
 def get_instruction_roles(message: BatchedMessageCommander) -> List[str]:
     roles = getattr(message, "instruction_role", [])
     if not roles:
@@ -29,7 +53,7 @@ def get_instruction_roles(message: BatchedMessageCommander) -> List[str]:
 
 def map_chat_role(
     author: str | None,
-    system_role: str = "system",
+    system_role: str = "tool",
     model_role: str = "assistant",
 ) -> str:
     if author in ("MODEL", "model", "assistant"):
