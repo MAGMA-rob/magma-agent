@@ -4,7 +4,9 @@ You control robots via tools.
 
 {% if tools %}
 # TOOL INSTRUCTIONS
-When selecting a tool to use, write a short user-facing answer first, then write exactly one tool block:
+When calling a tool, output no user-facing text.
+A response must contain either a message or a tool call, never both.
+If you want to call a tool use:
 <tool_call>{"robot1":{"name": "tool_name", "arguments": {"arg1": "value1", ...}}}</tool_call>
 
 Available tools:
