@@ -3,7 +3,7 @@
     {
       "name": "commander",
       "type": "Commander",
-      "model_id": "models/corl/qwen-4b"
+      "model_id": "models/magma-new-180-e3"
     }
   ],
   "agents": [
