@@ -11,6 +11,8 @@ from .clients.dispatcher.loader import load_dispatcher
 from .clients.dispatcher.messages import BatchedMessageDispatcher, MessageDispatcher
 from .clients.tsm.loader import load_tsm
 from .clients.tsm.messages import BatchedMessageTSM, MessageTSM
+from .clients.summarizer.loader import load_summarizer
+from .clients.summarizer.messages import BatchedMessageSummarizer, MessageSummarizer
 from .config import ModelSettings
 
 
@@ -122,6 +124,17 @@ def format_tsm_batch_response(message: BaseModel, answers: List[Any]) -> List[An
     return answers
 
 
+def summarizer_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
+    summarizer_message = message
+    return (
+        BatchedMessageSummarizer(
+            previous_summary=[summarizer_message.previous_summary],
+            history=[summarizer_message.history],
+        ),
+        summarizer_message.inference_mode,
+    )
+
+
 MODEL_TYPES: Dict[str, ModelTypeSpec] = {
     "Commander": ModelTypeSpec(
         model_type="Commander",
@@ -152,6 +165,16 @@ MODEL_TYPES: Dict[str, ModelTypeSpec] = {
         single_to_batch=dispatcher_single_to_batch,
         format_single_response=format_commander_single_response,
         format_batch_response=format_dispatcher_batch_response,
+    ),
+    "Summarizer": ModelTypeSpec(
+        model_type="Summarizer",
+        default_endpoint="/summarize",
+        single_message=MessageSummarizer,
+        batched_message=BatchedMessageSummarizer,
+        load=load_summarizer,
+        single_to_batch=summarizer_single_to_batch,
+        format_single_response=format_commander_single_response,
+        format_batch_response=format_tsm_batch_response,
     ),
 }
 

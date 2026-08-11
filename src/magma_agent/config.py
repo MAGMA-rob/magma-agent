@@ -25,6 +25,7 @@ class AgentSettings(BaseModel):
     name: str
     type: str
     models: Dict[str, str]
+    options: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Settings(BaseSettings):
