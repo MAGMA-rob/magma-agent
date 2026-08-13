@@ -1,12 +1,6 @@
 from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field
-
-
-class MessageSummarizer(BaseModel):
-    previous_summary: str = ""
-    history: List[Dict[str, Any]] = Field(default_factory=list)
-    inference_mode: bool = False
+from pydantic import BaseModel
 
 
 class BatchedMessageSummarizer(BaseModel):

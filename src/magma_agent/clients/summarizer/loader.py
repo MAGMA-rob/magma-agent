@@ -6,7 +6,6 @@ from .base import MagmaSummarizer
 def load_summarizer(
     name: str,
     model_id: str,
-    endpoint: str,
     optimize_memory: bool,
     options: Dict[str, Any],
 ) -> MagmaSummarizer:
@@ -24,5 +23,4 @@ def load_summarizer(
         cpu_load=optimize_memory,
         max_new_tokens=max_new_tokens,
         name=name,
-        endpoint=endpoint,
     )

@@ -1,199 +1,51 @@
-import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Type
-
-from pydantic import BaseModel
+from typing import Any, Callable, Dict
 
 from .clients.base import BaseModelClient
 from .clients.commander.loader import load_commander
-from .clients.commander.messages import BatchedMessageCommander, MessageCommander
 from .clients.dispatcher.loader import load_dispatcher
-from .clients.dispatcher.messages import BatchedMessageDispatcher, MessageDispatcher
-from .clients.tsm.loader import load_tsm
-from .clients.tsm.messages import BatchedMessageTSM, MessageTSM
 from .clients.summarizer.loader import load_summarizer
-from .clients.summarizer.messages import BatchedMessageSummarizer, MessageSummarizer
+from .clients.tsm.loader import load_tsm
 from .config import ModelSettings
+
+
+ModelLoader = Callable[
+    [str, str, bool, Dict[str, Any]],
+    BaseModelClient,
+]
 
 
 @dataclass(frozen=True)
 class ModelTypeSpec:
     model_type: str
-    default_endpoint: str
-    single_message: Type[BaseModel]
-    batched_message: Type[BaseModel]
-    load: Callable[[str, str, str, bool, Dict[str, Any]], BaseModelClient]
-    single_to_batch: Callable[[BaseModel], tuple[BaseModel, bool]]
-    format_single_response: Callable[[Any], Any]
-    format_batch_response: Callable[[BaseModel, List[Any]], Any]
-
-
-def commander_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
-    commander_message = message
-    return (
-        BatchedMessageCommander(
-            memory=[commander_message.memory],
-            attributes=[commander_message.attributes],
-            history=[commander_message.history],
-            function=[commander_message.function],
-            instruction=[commander_message.instruction],
-            instruction_role=[commander_message.instruction_role],
-            prediction_mode=commander_message.prediction_mode,
-        ),
-        commander_message.inference_mode,
-    )
-
-
-def format_commander_single_response(answer: Any) -> Any:
-    return answer
-
-
-def format_tool_batch_response(
-    message: BaseModel,
-    answers: List[Any],
-    model_label: str,
-) -> Dict[str, List[Any]]:
-    out: Dict[str, List[Any]] = {
-        "think": [],
-        "say": [],
-        "action": [],
-    }
-
-    for answer in answers:
-        if isinstance(answer, str):
-            answer = json.loads(answer)
-
-        out["think"].append(answer.get("think", ""))
-        out["say"].append(answer.get("say", ""))
-
-        if message.prediction_mode == "sequence":
-            out["action"].append(answer.get("action", []))
-            continue
-
-        action = answer.get("action", {})
-        if isinstance(action, list):
-            print(
-                f"[{model_label}] Model returned a sequence but prediction_mode is set to tool_select"
-            )
-            action = action[0] if action else {}
-        out["action"].append(action)
-
-    return out
-
-
-def format_commander_batch_response(message: BaseModel, answers: List[Any]) -> Dict[str, List[Any]]:
-    return format_tool_batch_response(message, answers, "COMMANDER")
-
-
-def dispatcher_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
-    dispatcher_message = message
-    return (
-        BatchedMessageDispatcher(
-            memory=[dispatcher_message.memory],
-            attributes=[dispatcher_message.attributes],
-            history=[dispatcher_message.history],
-            function=[dispatcher_message.function],
-        ),
-        dispatcher_message.inference_mode,
-    )
-
-
-def format_dispatcher_batch_response(message: BaseModel, answers: List[Any]) -> List[Any]:
-    return answers
-
-
-def tsm_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
-    tsm_message = message
-    return (
-        BatchedMessageTSM(
-            permanent_rules=[tsm_message.permanent_rules],
-            goals=[tsm_message.goals],
-            rules=[tsm_message.rules],
-            todo=[tsm_message.todo],
-            instruction=[tsm_message.instruction],
-        ),
-        tsm_message.inference_mode,
-    )
-
-
-def format_tsm_single_response(answer: Any) -> Any:
-    return answer
-
-
-def format_tsm_batch_response(message: BaseModel, answers: List[Any]) -> List[Any]:
-    return answers
-
-
-def summarizer_single_to_batch(message: BaseModel) -> tuple[BaseModel, bool]:
-    summarizer_message = message
-    return (
-        BatchedMessageSummarizer(
-            previous_summary=[summarizer_message.previous_summary],
-            history=[summarizer_message.history],
-        ),
-        summarizer_message.inference_mode,
-    )
+    load: ModelLoader
 
 
 MODEL_TYPES: Dict[str, ModelTypeSpec] = {
-    "Commander": ModelTypeSpec(
-        model_type="Commander",
-        default_endpoint="/chat",
-        single_message=MessageCommander,
-        batched_message=BatchedMessageCommander,
-        load=load_commander,
-        single_to_batch=commander_single_to_batch,
-        format_single_response=format_commander_single_response,
-        format_batch_response=format_commander_batch_response,
-    ),
-    "TSM": ModelTypeSpec(
-        model_type="TSM",
-        default_endpoint="/update_representation",
-        single_message=MessageTSM,
-        batched_message=BatchedMessageTSM,
-        load=load_tsm,
-        single_to_batch=tsm_single_to_batch,
-        format_single_response=format_tsm_single_response,
-        format_batch_response=format_tsm_batch_response,
-    ),
-    "Dispatcher": ModelTypeSpec(
-        model_type="Dispatcher",
-        default_endpoint="/dispatch",
-        single_message=MessageDispatcher,
-        batched_message=BatchedMessageDispatcher,
-        load=load_dispatcher,
-        single_to_batch=dispatcher_single_to_batch,
-        format_single_response=format_commander_single_response,
-        format_batch_response=format_dispatcher_batch_response,
-    ),
-    "Summarizer": ModelTypeSpec(
-        model_type="Summarizer",
-        default_endpoint="/summarize",
-        single_message=MessageSummarizer,
-        batched_message=BatchedMessageSummarizer,
-        load=load_summarizer,
-        single_to_batch=summarizer_single_to_batch,
-        format_single_response=format_commander_single_response,
-        format_batch_response=format_tsm_batch_response,
-    ),
+    "Commander": ModelTypeSpec("Commander", load_commander),
+    "TSM": ModelTypeSpec("TSM", load_tsm),
+    "Dispatcher": ModelTypeSpec("Dispatcher", load_dispatcher),
+    "Summarizer": ModelTypeSpec("Summarizer", load_summarizer),
 }
 
 
 def get_model_type(model_type: str) -> ModelTypeSpec:
     try:
         return MODEL_TYPES[model_type]
-    except KeyError as err:
+    except KeyError as error:
         available = ", ".join(sorted(MODEL_TYPES))
-        raise ValueError(f"Unknown model type {model_type!r}. Available types: {available}") from err
+        raise ValueError(
+            f"Unknown model type {model_type!r}. Available types: {available}"
+        ) from error
 
 
-def load_declared_model(settings: ModelSettings, optimize_memory: bool) -> BaseModelClient:
-    spec = get_model_type(settings.type)
-    endpoint = settings.endpoint or spec.default_endpoint
-    return spec.load(
+def load_declared_model(
+    settings: ModelSettings,
+    optimize_memory: bool,
+) -> BaseModelClient:
+    return get_model_type(settings.type).load(
         settings.name,
         settings.model_id,
-        endpoint,
         optimize_memory,
         settings.options,
     )

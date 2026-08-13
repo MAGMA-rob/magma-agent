@@ -108,7 +108,6 @@ class OSSCommander(BaseCommander):
         model_id: str,
         cpu_load: bool = False,
         name: str = "commander",
-        endpoint: str = "/chat",
     ) -> None:
         self._ensure_harmony_available()
         self.encoding = self._load_harmony_encoding()
@@ -118,7 +117,6 @@ class OSSCommander(BaseCommander):
             model_id,
             cpu_load=False,
             name=name,
-            endpoint=endpoint,
             dtype="auto",
             load_kwargs={"device_map": "auto"},
             runtime_device_move=False,

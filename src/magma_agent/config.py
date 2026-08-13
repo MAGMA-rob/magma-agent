@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,15 +10,7 @@ class ModelSettings(BaseModel):
     name: str
     type: str
     model_id: str
-    endpoint: Optional[str] = None
     options: Dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("endpoint")
-    @classmethod
-    def validate_endpoint(cls, endpoint: Optional[str]) -> Optional[str]:
-        if endpoint is not None and not endpoint.startswith("/"):
-            raise ValueError("Model endpoint must start with '/'.")
-        return endpoint
 
 
 class AgentSettings(BaseModel):

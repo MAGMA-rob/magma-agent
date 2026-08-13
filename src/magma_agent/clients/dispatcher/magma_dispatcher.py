@@ -23,10 +23,9 @@ class MagmaDispatcher(BaseDispatcher):
         overriding_chat_template_path: Optional[str],
         cpu_load: bool,
         name: str = "dispatcher",
-        endpoint: str = "/dispatch",
         max_new_tokens: int = 2500,
     ) -> None:
-        super().__init__(model_id, cpu_load, name=name, endpoint=endpoint)
+        super().__init__(model_id, cpu_load, name=name)
         if overriding_chat_template_path is not None:
             with open(overriding_chat_template_path, "r", encoding="utf-8") as f:
                 self.tokenizer.chat_template = f.read()

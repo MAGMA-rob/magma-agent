@@ -19,9 +19,8 @@ class MagmaCommander(BaseCommander):
         overriding_chat_template_path: Optional[str],
         cpu_load: bool,
         name: str = "commander",
-        endpoint: str = "/chat",
     ) -> None:
-        super().__init__(model_id, cpu_load, name=name, endpoint=endpoint)
+        super().__init__(model_id, cpu_load, name=name)
         if overriding_chat_template_path is not None:
             with open(overriding_chat_template_path, "r", encoding="utf-8") as f:
                 chat_template_content = f.read()

@@ -1,30 +1,19 @@
-import json
 from copy import deepcopy
 from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import field_validator
 
 from magma_core.protocol.agent import AgentOutput, AgentRequest
 
 from magma_agent.clients.commander.base import BaseCommander
-from magma_agent.clients.commander.messages import BatchedMessageCommander
 from magma_agent.clients.summarizer.messages import BatchedMessageSummarizer
 from magma_agent.models import BaseModelClient
 
-from .base import BaseAgent, ModelCall
-from .history_reactive import validate_commander_action
+from .base import ModelCall
+from .history_reactive import HistoryReactiveAgent, HistoryReactiveInput
 
 
-class HistorySummaryReactiveInput(BaseModel):
-    memory: Dict[str, Any] = Field(default_factory=dict)
-    attributes: Dict[str, Any] = Field(default_factory=dict)
-    history: List[Dict[str, Any]] = Field(default_factory=list)
-    function: List[Dict[str, Any]] = Field(default_factory=list)
-    instruction: str
-    instruction_role: str = "USER"
-    inference_mode: bool = False
-    prediction_mode: str = "tool_select"
-
+class HistorySummaryReactiveInput(HistoryReactiveInput):
     @field_validator("memory")
     @classmethod
     def validate_summary(cls, memory: Dict[str, Any]) -> Dict[str, Any]:
@@ -37,7 +26,7 @@ class HistorySummaryReactiveInput(BaseModel):
         return memory
 
 
-class HistorySummaryReactiveAgent(BaseAgent):
+class HistorySummaryReactiveAgent(HistoryReactiveAgent):
     def __init__(
         self,
         name: str,
@@ -45,7 +34,7 @@ class HistorySummaryReactiveAgent(BaseAgent):
         commander: BaseModelClient,
         max_context_tokens: int = 5000,
     ) -> None:
-        super().__init__(name)
+        super().__init__(name, commander)
         if not isinstance(max_context_tokens, int) or max_context_tokens <= 0:
             raise ValueError("max_context_tokens must be a positive integer")
         if not isinstance(commander, BaseCommander) or not hasattr(
@@ -55,26 +44,11 @@ class HistorySummaryReactiveAgent(BaseAgent):
                 "History summary reactive requires a MagmaCommander with prompt counting support."
             )
         self.summarizer = summarizer
-        self.commander = commander
         self.max_context_tokens = max_context_tokens
 
     @property
     def models(self) -> list[BaseModelClient]:
         return [self.summarizer, self.commander]
-
-    @staticmethod
-    def _commander_message(
-        inputs: List[HistorySummaryReactiveInput],
-    ) -> BatchedMessageCommander:
-        return BatchedMessageCommander(
-            memory=[deepcopy(item.memory) for item in inputs],
-            attributes=[deepcopy(item.attributes) for item in inputs],
-            history=[deepcopy(item.history) for item in inputs],
-            function=[deepcopy(item.function) for item in inputs],
-            instruction=[item.instruction for item in inputs],
-            instruction_role=[item.instruction_role for item in inputs],
-            prediction_mode=inputs[0].prediction_mode if inputs else "tool_select",
-        )
 
     @staticmethod
     def _invalid_outputs(
@@ -221,47 +195,14 @@ class HistorySummaryReactiveAgent(BaseAgent):
                 self._commander_message(commander_inputs),
                 inference_mode,
             )
-            if len(raw_answers) != len(sources):
-                raise ValueError(
-                    f"Commander returned {len(raw_answers)} output(s) for "
-                    f"{len(sources)} candidate(s)."
-                )
-            candidate_indices: Dict[int, int] = {}
-            validities = []
-            for source_id, answer, summary_update in zip(
-                sources, raw_answers, commander_updates
-            ):
-                candidate_index = candidate_indices.get(source_id, 0)
-                candidate_indices[source_id] = candidate_index + 1
-                try:
-                    if isinstance(answer, str):
-                        answer = json.loads(answer)
-                    if not isinstance(answer, dict):
-                        raise ValueError("Commander output must be a JSON object")
-                    output = {
-                        "say": answer.get("say", ""),
-                        "action": validate_commander_action(answer.get("action", {})),
-                        "summary_update": deepcopy(summary_update),
-                    }
-                    if "think" in answer:
-                        output["think"] = answer["think"]
-                    valid = True
-                except (TypeError, ValueError, json.JSONDecodeError) as error:
-                    output = {
-                        "component": "commander",
-                        "reason": str(error),
-                        "raw_output": answer,
-                        "summary_update": deepcopy(summary_update),
-                    }
-                    valid = False
-                validities.append(valid)
-                outputs.append(AgentOutput(
-                    source_id=source_id,
-                    candidate_index=candidate_index,
-                    valid=valid,
-                    output=output,
-                ))
-            self.commander.update_prompt_log_validity(validities)
+            outputs.extend(self._commander_outputs(
+                sources,
+                raw_answers,
+                [
+                    {"summary_update": summary_update}
+                    for summary_update in commander_updates
+                ],
+            ))
 
         source_order = {
             entry.id: index

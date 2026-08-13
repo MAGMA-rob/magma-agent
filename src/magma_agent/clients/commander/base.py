@@ -17,7 +17,6 @@ class BaseCommander(BaseModelClient, ABC):
         model_id : str,
         cpu_load : bool,
         name: str = "commander",
-        endpoint: str = "/chat",
         dtype: Any = torch.float16,
         quantization = None,
         load_kwargs: Optional[Dict[str, Any]] = None,
@@ -27,7 +26,6 @@ class BaseCommander(BaseModelClient, ABC):
             name=name,
             model_type="Commander",
             model_id=model_id,
-            endpoint=endpoint,
         )
         model_kwargs = {
             "dtype": dtype,

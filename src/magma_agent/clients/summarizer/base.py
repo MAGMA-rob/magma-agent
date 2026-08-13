@@ -19,13 +19,11 @@ class MagmaSummarizer(BaseModelClient):
         cpu_load: bool,
         max_new_tokens: int,
         name: str = "summarizer",
-        endpoint: str = "/summarize",
     ) -> None:
         super().__init__(
             name=name,
             model_type="Summarizer",
             model_id=model_id,
-            endpoint=endpoint,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
         if self.tokenizer.chat_template is None:
