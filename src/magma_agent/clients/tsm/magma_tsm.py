@@ -18,9 +18,8 @@ class MagmaTSM(TaskStateManager):
         cpu_load: bool,
         overriding_chat_template_path: Optional[str] = None,
         name: str = "tsm",
-        endpoint: str = "/update_representation",
     ) -> None:
-        super().__init__(model_id, cpu_load, name=name, endpoint=endpoint)
+        super().__init__(model_id, cpu_load, name=name)
         if overriding_chat_template_path is not None:
             with open(overriding_chat_template_path, "r", encoding="utf-8") as f:
                 self.tokenizer.chat_template = f.read()

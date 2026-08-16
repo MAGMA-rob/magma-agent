@@ -19,9 +19,8 @@ class MagmaCommander(BaseCommander):
         overriding_chat_template_path: Optional[str],
         cpu_load: bool,
         name: str = "commander",
-        endpoint: str = "/chat",
     ) -> None:
-        super().__init__(model_id, cpu_load, name=name, endpoint=endpoint)
+        super().__init__(model_id, cpu_load, name=name)
         if overriding_chat_template_path is not None:
             with open(overriding_chat_template_path, "r", encoding="utf-8") as f:
                 chat_template_content = f.read()
@@ -31,10 +30,7 @@ class MagmaCommander(BaseCommander):
             raise ValueError(f"Unknow {output_style} commander output format. Avalaibles are json or qwen_format")
         self.output_style = output_style
 
-    def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
- 
-        mx_lenght = 0
-        formatted_inputs = []
+    def _format_batch(self, message: BatchedMessageCommander) -> List[str]:
         instruction_roles = get_instruction_roles(message)
         batch_size = len(message.instruction)
 
@@ -49,41 +45,55 @@ class MagmaCommander(BaseCommander):
                     f"({len(field_value)} != {batch_size})."
                 )
 
-        for i in range(batch_size):
-            permanent_rules = get_memory_list(message.memory[i])
+        formatted_inputs = []
+        for index in range(batch_size):
+            memory = message.memory[index]
+            summary = memory.get("summary", "")
+            if summary is None:
+                summary = ""
+            if not isinstance(summary, str):
+                raise TypeError(
+                    "Commander memory['summary'] must be a string when provided."
+                )
 
-            messages= []
-
-            for previous_mess in message.history[i]:
-                role = map_chat_role(previous_mess.get("author"))
+            messages = []
+            for previous_message in message.history[index]:
+                role = map_chat_role(previous_message.get("author"))
                 messages.append({
                     "role": role,
-                    "content": format_history_content(previous_mess, role),
+                    "content": format_history_content(previous_message, role),
                 })
-
             messages.append({
-                "role": map_chat_role(instruction_roles[i]),
-                "content": message.instruction[i],
+                "role": map_chat_role(instruction_roles[index]),
+                "content": message.instruction[index],
             })
             formatted_inputs.append(self.tokenizer.apply_chat_template(
-                    messages,
-                    tools=message.function[i],
-                    permanent_rules=permanent_rules,
-                    task_attributes=message.attributes[i],
-                    tokenize=False,
-                    add_generation_prompt=True
-                )
+                messages,
+                tools=message.function[index],
+                permanent_rules=get_memory_list(memory),
+                summary=summary,
+                task_attributes=message.attributes[index],
+                tokenize=False,
+                add_generation_prompt=True,
+            ))
+        if any(not prompt for prompt in formatted_inputs):
+            raise ValueError(
+                "The commander chat template produced an empty prompt. "
+                "Check that the loaded tokenizer/chat_template matches the "
+                "model and the MagmaCommander formatting arguments."
             )
-            lenght = len(self.tokenizer(formatted_inputs[i], return_tensors="pt")["input_ids"][0])
-            if lenght == 0:
-                raise ValueError(
-                    "The commander chat template produced an empty prompt. "
-                    "Check that the loaded tokenizer/chat_template matches the "
-                    "model and the MagmaCommander formatting arguments."
-                )
+        return formatted_inputs
 
-            if mx_lenght < lenght:
-                mx_lenght = lenght
+    def count_prompt_tokens(self, message: BatchedMessageCommander) -> List[int]:
+        formatted_inputs = self._format_batch(message)
+        encoded = self.tokenizer(
+            formatted_inputs,
+            padding=False,
+        )
+        return [len(input_ids) for input_ids in encoded["input_ids"]]
+
+    def process_batched_entry(self, message : BatchedMessageCommander, inference_mode : bool) -> List[Dict]:
+        formatted_inputs = self._format_batch(message)
 
         inputs = self.tokenizer(formatted_inputs, return_tensors="pt", padding=True).to(self.input_device)
         if os.getenv("MAGMA_DEBUG_TOKENIZER") == "1":

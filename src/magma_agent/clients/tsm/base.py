@@ -16,13 +16,11 @@ class TaskStateManager(BaseModelClient, ABC):
         cpu_load: bool,
         tokenizer=None,
         name: str = "tsm",
-        endpoint: str = "/update_representation",
     ) -> None:
         super().__init__(
             name=name,
             model_type="TSM",
             model_id=model_id,
-            endpoint=endpoint,
         )
         if tokenizer:
             self.tokenizer = tokenizer

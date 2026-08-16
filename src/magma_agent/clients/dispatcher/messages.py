@@ -77,22 +77,6 @@ def get_representation_field(memory: Dict[str, Any], field_name: str) -> List[st
     return value
 
 
-class MessageDispatcher(BaseModel):
-    memory: Dict[str, Any]
-    attributes: Dict[str, Any]
-    history: List[Dict[str, Any]]
-    function: List[Dict[str, Any]]
-    inference_mode: bool = False
-
-    @field_validator("memory")
-    @classmethod
-    def validate_memory(cls, memory: Dict[str, Any]) -> Dict[str, Any]:
-        get_permanent_rules(memory)
-        for field_name in REPRESENTATION_FIELDS:
-            get_representation_field(memory, field_name)
-        return memory
-
-
 class BatchedMessageDispatcher(BaseModel):
     memory: List[Dict[str, Any]]
     attributes: List[Dict[str, Any]]

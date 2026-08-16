@@ -6,7 +6,6 @@ from . import MagmaTSM
 def load_tsm(
     name: str,
     model_id: str,
-    endpoint: str,
     optimize_memory: bool,
     options: Dict[str, Any],
 ):
@@ -19,6 +18,5 @@ def load_tsm(
         model_id=model_id,
         cpu_load=optimize_memory,
         name=name,
-        endpoint=endpoint,
         overriding_chat_template_path=options.get("chat_template"),
     )

@@ -6,7 +6,6 @@ from . import MagmaDispatcher, QwenDispatcher
 def load_dispatcher(
     name: str,
     model_id: str,
-    endpoint: str,
     optimize_memory: bool,
     options: Dict[str, Any],
 ):
@@ -35,7 +34,6 @@ def load_dispatcher(
             model_id,
             cpu_load=optimize_memory,
             name=name,
-            endpoint=endpoint,
             quantization_mode=options.get("quantization_mode", "4bit"),
             max_new_tokens=options.get("max_new_tokens", 600),
             attn_implementation=options.get("attn_implementation", "sdpa"),
@@ -63,7 +61,6 @@ def load_dispatcher(
         model_id=model_id,
         cpu_load=optimize_memory,
         name=name,
-        endpoint=endpoint,
         overriding_chat_template_path=options.get("chat_template"),
         max_new_tokens=options.get("max_new_tokens", 2500),
     )

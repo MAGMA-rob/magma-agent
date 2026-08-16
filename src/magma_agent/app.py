@@ -7,7 +7,11 @@ import torch
 from fastapi import FastAPI, HTTPException
 from magma_core.protocol.agent import AgentRequest, AgentResponse
 
-from .agents import HistoryReactiveAgent, TaskStateReactiveAgent
+from .agents import (
+    HistoryReactiveAgent,
+    HistorySummaryReactiveAgent,
+    TaskStateReactiveAgent,
+)
 from .config import Settings
 from .registry import get_model_type, load_declared_model
 
@@ -67,6 +71,41 @@ def create_app(settings: Settings) -> FastAPI:
                         agent = HistoryReactiveAgent(
                             agent_settings.name,
                             commander,
+                        )
+                    elif agent_settings.type == "history_summary_reactive":
+                        summarizer = app.state.models[
+                            agent_settings.models["summarizer"]
+                        ]
+                        commander = app.state.models[
+                            agent_settings.models["commander"]
+                        ]
+                        if summarizer.model_type != "Summarizer":
+                            raise ValueError(
+                                f"Agent {agent_settings.name!r} requires a "
+                                "Summarizer model."
+                            )
+                        if commander.model_type != "Commander":
+                            raise ValueError(
+                                f"Agent {agent_settings.name!r} requires a "
+                                "Commander model."
+                            )
+                        max_context_tokens = agent_settings.options.get(
+                            "max_context_tokens",
+                            5000,
+                        )
+                        unsupported_options = sorted(
+                            set(agent_settings.options) - {"max_context_tokens"}
+                        )
+                        if unsupported_options:
+                            raise ValueError(
+                                f"Unsupported history summary reactive options: "
+                                f"{unsupported_options}"
+                            )
+                        agent = HistorySummaryReactiveAgent(
+                            agent_settings.name,
+                            summarizer,
+                            commander,
+                            max_context_tokens=max_context_tokens,
                         )
                     elif agent_settings.type == "task_state_reactive":
                         tsm = app.state.models[agent_settings.models["tsm"]]

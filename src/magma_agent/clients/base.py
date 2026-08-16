@@ -9,7 +9,6 @@ from uuid import uuid4
 
 class BaseModelClient(ABC):
     model_type: str
-    endpoint: str
     model_id: str
     name: str
 
@@ -18,12 +17,10 @@ class BaseModelClient(ABC):
         name: str,
         model_type: str,
         model_id: str,
-        endpoint: str,
     ) -> None:
         self.name = name
         self.model_type = model_type
         self.model_id = model_id
-        self.endpoint = endpoint
         self.lock = asyncio.Lock()
         self.prompt_log_dir: Path | None = None
         self._prompt_log_paths: ContextVar[tuple[Path, ...]] = ContextVar(

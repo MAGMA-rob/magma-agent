@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, List
+from copy import deepcopy
+from typing import Any, Dict, List, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +52,82 @@ class HistoryReactiveAgent(BaseAgent):
     def models(self) -> list[BaseModelClient]:
         return [self.commander]
 
+    @staticmethod
+    def _commander_message(
+        inputs: Sequence[HistoryReactiveInput],
+    ) -> BatchedMessageCommander:
+        return BatchedMessageCommander(
+            memory=[deepcopy(item.memory) for item in inputs],
+            attributes=[deepcopy(item.attributes) for item in inputs],
+            history=[deepcopy(item.history) for item in inputs],
+            function=[deepcopy(item.function) for item in inputs],
+            instruction=[item.instruction for item in inputs],
+            instruction_role=[item.instruction_role for item in inputs],
+            prediction_mode=(
+                inputs[0].prediction_mode
+                if inputs
+                else "tool_select"
+            ),
+        )
+
+    def _commander_outputs(
+        self,
+        sources: Sequence[int],
+        answers: Sequence[Any],
+        metadata: Sequence[Dict[str, Any]] | None = None,
+    ) -> List[AgentOutput]:
+        if len(answers) != len(sources):
+            raise ValueError(
+                f"Commander returned {len(answers)} output(s) for "
+                f"{len(sources)} candidate(s)."
+            )
+        if metadata is not None and len(metadata) != len(sources):
+            raise ValueError(
+                "Commander output metadata must match the number of candidates."
+            )
+
+        candidate_indices: Dict[int, int] = {}
+        outputs = []
+        for index, (source_id, answer) in enumerate(zip(sources, answers)):
+            candidate_index = candidate_indices.get(source_id, 0)
+            candidate_indices[source_id] = candidate_index + 1
+            extra_output = deepcopy(metadata[index]) if metadata is not None else {}
+            try:
+                if isinstance(answer, str):
+                    answer = json.loads(answer)
+                if not isinstance(answer, dict):
+                    raise ValueError("Commander output must be a JSON object")
+                output = {
+                    "say": answer.get("say", ""),
+                    "action": validate_commander_action(answer.get("action", {})),
+                    **extra_output,
+                }
+                if "think" in answer:
+                    output["think"] = answer["think"]
+                valid = True
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                output = {
+                    "component": "commander",
+                    "reason": str(error),
+                    "raw_output": answer,
+                    **extra_output,
+                }
+                valid = False
+
+            outputs.append(
+                AgentOutput(
+                    source_id=source_id,
+                    candidate_index=candidate_index,
+                    valid=valid,
+                    output=output,
+                )
+            )
+
+        self.commander.update_prompt_log_validity(
+            [output.valid for output in outputs]
+        )
+        return outputs
+
     async def process(
         self,
         request: AgentRequest,
@@ -68,22 +145,12 @@ class HistoryReactiveAgent(BaseAgent):
         ]
 
         sources = []
-        memory = []
-        attributes = []
-        history = []
-        functions = []
-        instructions = []
-        instruction_roles = []
+        commander_inputs = []
 
         for entry, agent_input in zip(request.inputs, parsed_inputs):
             for _ in range(candidate_count):
                 sources.append(entry.id)
-                memory.append(agent_input.memory.copy())
-                attributes.append(agent_input.attributes.copy())
-                history.append(agent_input.history.copy())
-                functions.append(agent_input.function.copy())
-                instructions.append(agent_input.instruction)
-                instruction_roles.append(agent_input.instruction_role)
+                commander_inputs.append(agent_input)
 
         if not sources:
             return []
@@ -97,58 +164,7 @@ class HistoryReactiveAgent(BaseAgent):
 
         answers = await model_call(
             self.commander,
-            BatchedMessageCommander(
-                memory=memory,
-                attributes=attributes,
-                history=history,
-                function=functions,
-                instruction=instructions,
-                instruction_role=instruction_roles,
-                prediction_mode=prediction_modes.pop(),
-            ),
+            self._commander_message(commander_inputs),
             inference_modes.pop(),
         )
-        if len(answers) != len(sources):
-            raise ValueError(
-                f"Commander returned {len(answers)} output(s) for "
-                f"{len(sources)} candidate(s)."
-            )
-
-        candidate_indices: Dict[int, int] = {}
-        outputs = []
-        for source_id, answer in zip(sources, answers):
-            candidate_index = candidate_indices.get(source_id, 0)
-            candidate_indices[source_id] = candidate_index + 1
-            try:
-                if isinstance(answer, str):
-                    answer = json.loads(answer)
-                if not isinstance(answer, dict):
-                    raise ValueError("Commander output must be a JSON object")
-                action = validate_commander_action(answer.get("action", {}))
-                output = {
-                    "say": answer.get("say", ""),
-                    "action": action,
-                }
-                if "think" in answer:
-                    output["think"] = answer["think"]
-                valid = True
-            except (TypeError, ValueError, json.JSONDecodeError) as error:
-                output = {
-                    "component": "commander",
-                    "reason": str(error),
-                    "raw_output": answer,
-                }
-                valid = False
-
-            outputs.append(
-                AgentOutput(
-                    source_id=source_id,
-                    candidate_index=candidate_index,
-                    valid=valid,
-                    output=output,
-                )
-            )
-        self.commander.update_prompt_log_validity(
-            [output.valid for output in outputs]
-        )
-        return outputs
+        return self._commander_outputs(sources, answers)

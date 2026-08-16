@@ -6,7 +6,6 @@ from . import MagmaCommander, OSSCommander, QwenCommander
 def load_commander(
     name: str,
     model_id: str,
-    endpoint: str,
     optimize_memory: bool,
     options: Dict[str, Any],
 ):
@@ -17,7 +16,6 @@ def load_commander(
             model_id,
             cpu_load=optimize_memory,
             name=name,
-            endpoint=endpoint,
             quantization_mode=options.get("quantization_mode", "4bit"),
             max_new_tokens=options.get("max_new_tokens", 1500),
             attn_implementation=options.get("attn_implementation", "sdpa"),
@@ -35,7 +33,6 @@ def load_commander(
             model_id,
             cpu_load=optimize_memory,
             name=name,
-            endpoint=endpoint,
         )
 
     print(f"[MAGMA AGENT] Loading Commander Model: {model_id}")
@@ -43,7 +40,6 @@ def load_commander(
         model_id=model_id,
         cpu_load=optimize_memory,
         name=name,
-        endpoint=endpoint,
         output_style=options.get("output_style", "qwen_format"),
         overriding_chat_template_path=options.get("chat_template"),
     )

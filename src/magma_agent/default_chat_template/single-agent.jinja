@@ -21,6 +21,11 @@ Permanent rules:
 {% else %}
 empty
 {% endfor %}
+
+{% if summary %}
+Summary of past interactions:
+{{summary}}
+{% endif %}
 <|im_end|>
 
 {# ----------------- CHAT HISTORY ----------------- #}
