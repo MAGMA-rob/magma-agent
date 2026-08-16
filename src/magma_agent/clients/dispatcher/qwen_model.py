@@ -275,12 +275,6 @@ class QwenDispatcher(BaseDispatcher):
 
         responses = []
         for i in range(len(formatted_inputs)):
-            if i==0:
-                print("--------") 
-                print(self.tokenizer.decode(
-                    output[i],
-                    skip_special_tokens=True,
-                ).strip())
             generated_tokens = output[i][prompt_length:]
             response_text = self.tokenizer.decode(
                 generated_tokens,
