@@ -13,10 +13,14 @@ or:
 </message>
 <completed>[]</completed>
 
+or:
+<noop>
+
 Output one or more <tool_call> blocks followed by exactly one <completed> block,
 or one <message> block followed by exactly one <completed> block.
 At most one tool call per robot.
 Message recipients: "user" or "tsm".
+Use only <noop> if no tool, message, or completed todo must be produced.
 Output nothing else.
 
 {% if tools %}

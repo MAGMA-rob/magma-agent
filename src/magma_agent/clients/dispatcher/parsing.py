@@ -14,9 +14,13 @@ MESSAGE_OUTPUT_RE = re.compile(
     r"<completed>\s*(?P<completed>.*?)\s*</completed>\s*",
     re.DOTALL,
 )
+NOOP_OUTPUT_RE = re.compile(r"\s*<noop>\s*")
 
 
 def parse_dispatcher_output(text: str) -> Union[Dict[str, Any], str]:
+    if NOOP_OUTPUT_RE.fullmatch(text):
+        return {"tools": [], "completed_todos": []}
+
     tools_match = TOOLS_OUTPUT_RE.fullmatch(text)
     message_match = MESSAGE_OUTPUT_RE.fullmatch(text)
     if tools_match is None and message_match is None:
