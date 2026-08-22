@@ -472,9 +472,31 @@ class TaskStateReactiveAgent(BaseAgent):
                 )
                 dispatcher_attributes.append(agent_input.attributes.copy())
                 dispatcher_functions.append(agent_input.function.copy())
-                dispatcher_history.append(
-                    [] if state["called"] else agent_input.history.copy()
+                history = (
+                    []
+                    if state["called"]
+                    else deepcopy(agent_input.history)
                 )
+                if agent_input.instruction.type == "tool_result":
+                    feedback_content = agent_input.instruction.content
+                    try:
+                        feedback = json.loads(feedback_content)
+                    except json.JSONDecodeError:
+                        feedback = feedback_content
+
+                    if isinstance(feedback, dict):
+                        feedback.pop("previous_tool_call", None)
+                        feedback_content = json.dumps(
+                            feedback,
+                            ensure_ascii=False,
+                        )
+
+                    history.append({
+                        "author": "SYSTEM",
+                        "content": feedback_content,
+                        "timestamp": 0,
+                    })
+                dispatcher_history.append(history)
 
         raw_dispatcher_outputs = []
         if pending_dispatcher:
