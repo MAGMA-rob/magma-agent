@@ -472,11 +472,7 @@ class TaskStateReactiveAgent(BaseAgent):
                 )
                 dispatcher_attributes.append(agent_input.attributes.copy())
                 dispatcher_functions.append(agent_input.function.copy())
-                history = (
-                    []
-                    if state["called"]
-                    else deepcopy(agent_input.history)
-                )
+                history = deepcopy(agent_input.history)
                 if agent_input.instruction.type == "tool_result":
                     feedback_content = agent_input.instruction.content
                     try:
