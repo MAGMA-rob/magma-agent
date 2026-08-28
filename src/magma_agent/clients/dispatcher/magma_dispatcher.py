@@ -7,10 +7,6 @@ import torch  # type: ignore
 from .base import BaseDispatcher
 from .messages import (
     BatchedMessageDispatcher,
-    REPRESENTATION_FIELDS,
-    format_dispatcher_history,
-    get_permanent_rules,
-    get_representation_field,
 )
 from .parsing import parse_dispatcher_output
 
@@ -47,14 +43,21 @@ class MagmaDispatcher(BaseDispatcher):
         inference_mode: bool,
     ) -> List[Union[Dict[str, Any], str]]:
         formatted_inputs = []
-        batch_size = len(message.memory)
+        batch_size = len(message.mode)
 
         if not batch_size:
             raise ValueError(
                 "BatchedMessageDispatcher must contain at least one entry."
             )
 
-        for field_name in ("attributes", "history", "function"):
+        for field_name in (
+            "permanent_rules",
+            "rules",
+            "goals",
+            "attributes",
+            "history",
+            "tools",
+        ):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
@@ -63,21 +66,16 @@ class MagmaDispatcher(BaseDispatcher):
                 )
 
         for i in range(batch_size):
-            memory = message.memory[i]
-            representation = {
-                field_name: get_representation_field(memory, field_name)
-                for field_name in REPRESENTATION_FIELDS
-            }
-
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
                     [{}],
-                    tools=message.function[i],
+                    mode=message.mode[i],
+                    tools=message.tools[i],
                     task_attributes=message.attributes[i],
-                    permanent_rules=get_permanent_rules(memory),
-                    rules=representation["rules"],
-                    todo=representation["todo"],
-                    history=format_dispatcher_history(message.history[i]),
+                    permanent_rules=message.permanent_rules[i],
+                    rules=message.rules[i],
+                    goals=message.goals[i],
+                    history=message.history[i],
                     tokenize=False,
                     add_generation_prompt=True,
                 )

@@ -1,6 +1,7 @@
 <|im_start|>system
 Select robot actions or send a message from the current task state.
 
+{% if mode == "execution" %}
 Output exactly one of:
 <tool_call>
 {"name":"robot.tool_name","arguments":{}}
@@ -22,6 +23,15 @@ At most one tool call per robot.
 Message recipients: "user" or "tsm".
 Use only <noop> if no tool, message, or completed todo must be produced.
 Output nothing else.
+{% endif %}
+
+{% if mode == "execution_report" %}
+Produce only a user-facing report summarizing the completed goals and todos.
+Use this syntax:
+<message>
+{"recipient":"user","content":"..."}
+</message>
+{% endif %}
 
 {% if tools %}
 <tools>
@@ -53,9 +63,9 @@ Rules:
 empty
 {% endfor %}
 
-ToDo:
-{% for task in todo %}
-- {{ task }}
+Goals:
+{% for goal in goals %}
+{{ goal }}
 {% else %}
 empty
 {% endfor %}

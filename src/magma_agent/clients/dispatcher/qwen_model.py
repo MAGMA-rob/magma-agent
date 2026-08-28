@@ -14,10 +14,6 @@ from magma_agent.clients.commander.qwen_model import (
 from .base import BaseDispatcher
 from .messages import (
     BatchedMessageDispatcher,
-    REPRESENTATION_FIELDS,
-    format_dispatcher_history,
-    get_permanent_rules,
-    get_representation_field,
 )
 from .parsing import parse_dispatcher_output
 
@@ -30,7 +26,7 @@ You are given:
 
 * Rules that must always be respected.
 * Permanent rules containing immutable guidance that must never be changed.
-* A todo list describing the remaining work.
+* Goals containing the todos describing the remaining work.
 * Task attributes describing the current environment.
 * A compact execution history containing previous tool calls and their results.
 * The list of available tools.
@@ -85,7 +81,7 @@ or use this field when you have finished all the todo or encountering blocking i
 
 ```json
 {
-  "recipient": "system",
+  "recipient": "tsm",
   "content": "..."
 }
 ```
@@ -96,8 +92,8 @@ A list of completed todo identifiers.
 
 ```json
 [
-  "0",
-  "1"
+  "t0",
+  "t1"
 ]
 ```
 
@@ -208,14 +204,21 @@ class QwenDispatcher(BaseDispatcher):
         inference_mode: bool,
     ) -> List[Union[Dict[str, Any], str]]:
         formatted_inputs = []
-        batch_size = len(message.memory)
+        batch_size = len(message.mode)
 
         if not batch_size:
             raise ValueError(
                 "BatchedMessageDispatcher must contain at least one entry."
             )
 
-        for field_name in ("attributes", "history", "function"):
+        for field_name in (
+            "permanent_rules",
+            "rules",
+            "goals",
+            "attributes",
+            "history",
+            "tools",
+        ):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
@@ -224,20 +227,16 @@ class QwenDispatcher(BaseDispatcher):
                 )
 
         for i in range(batch_size):
-            memory = message.memory[i]
-            representation = {
-                field_name: get_representation_field(memory, field_name)
-                for field_name in REPRESENTATION_FIELDS
-            }
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
                     [{}],
-                    tools=message.function[i],
+                    mode=message.mode[i],
+                    tools=message.tools[i],
                     task_attributes=message.attributes[i],
-                    permanent_rules=get_permanent_rules(memory),
-                    rules=representation["rules"],
-                    todo=representation["todo"],
-                    history=format_dispatcher_history(message.history[i]),
+                    permanent_rules=message.permanent_rules[i],
+                    rules=message.rules[i],
+                    goals=message.goals[i],
+                    history=message.history[i],
                     tokenize=False,
                     add_generation_prompt=True,
                 )

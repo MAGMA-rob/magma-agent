@@ -79,7 +79,5 @@ def parse_dispatcher_output(text: str) -> Union[Dict[str, Any], str]:
     recipient = message["recipient"]
     if recipient not in {"user", "tsm"} or not isinstance(message["content"], str):
         return text.strip()
-    if recipient == "tsm":
-        message["recipient"] = "system"
 
     return {"message": message, "completed_todos": completed_todos}

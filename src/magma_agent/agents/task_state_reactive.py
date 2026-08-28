@@ -1,10 +1,25 @@
-import json
-from copy import deepcopy
-from typing import Any, Dict, List, Literal, Optional
+from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from copy import deepcopy
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 from magma_core.protocol.agent import AgentOutput, AgentRequest
+from magma_core.tsr_engine import (
+    DispatcherMode,
+    ReactiveTaskState,
+    append_dispatcher_tool_calls,
+    append_environment_feedback,
+    dump_tsm_actions,
+    finalize_dispatcher_turn,
+    load_tsm_actions_text,
+    normalize_dispatcher_history,
+    prepare_dispatcher_turn,
+    render_dispatcher_history,
+    render_dispatcher_view,
+    render_tsm_view,
+)
 
 from magma_agent.models import (
     BaseModelClient,
@@ -15,211 +30,42 @@ from magma_agent.models import (
 from .base import BaseAgent, ModelCall
 
 
-REPRESENTATION_FIELDS = ("rules", "goals", "todo")
-
-
-class TaskStateInstruction(BaseModel):
-    type: Literal["message", "tool_result"]
+class TsmInstruction(BaseModel):
+    role: Literal["user", "system"]
     content: str
 
 
 class TaskStateReactiveInput(BaseModel):
-    memory: Dict[str, Any]
-    attributes: Dict[str, Any] = Field(default_factory=dict)
-    history: List[Dict[str, Any]] = Field(default_factory=list)
-    function: List[Dict[str, Any]] = Field(default_factory=list)
-    instruction: TaskStateInstruction
-    completed_todos: List[str] = Field(default_factory=list)
-    completed_goals: List[str] = Field(default_factory=list)
+    task_state: dict[str, Any]
+    call_tsm: bool
+    instruction: TsmInstruction | None = None
+    environment_feedback: list[str] = Field(default_factory=list)
+    persistent_rules: list[str] = Field(default_factory=list)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    dispatcher_history: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list)
     inference_mode: bool = False
-    tsm: Optional[Dict[str, Any]] = None
 
-
-def normalize_representation(memory: Dict[str, Any]) -> Dict[str, Any]:
-    representation = deepcopy(memory)
-    for field_name in REPRESENTATION_FIELDS:
-        value = representation.get(field_name, [])
-        if value is None:
-            value = []
-        if not isinstance(value, list):
-            raise TypeError(f"memory[{field_name!r}] must be a list")
-        if any(not isinstance(item, str) for item in value):
-            raise TypeError(f"memory[{field_name!r}] must contain only strings")
-        representation[field_name] = value.copy()
-    return representation
-
-
-def apply_task_state_update(
-    memory: Dict[str, Any],
-    update: Any,
-) -> Dict[str, Any]:
-    representation = normalize_representation(memory)
-    if isinstance(update, str):
-        raise ValueError(f"Cannot apply malformed TSM update: {update}")
-    if not isinstance(update, list):
-        raise TypeError(f"TSM update must be a list, got {type(update).__name__}")
-
-    action_targets = {
-        "add_goal": ("goals", "add"),
-        "remove_goal": ("goals", "remove"),
-        "add_rule": ("rules", "add"),
-        "remove_rule": ("rules", "remove"),
-        "add_todo": ("todo", "add"),
-        "remove_todo": ("todo", "remove"),
-    }
-    removals: Dict[str, List[int]] = {
-        field_name: []
-        for field_name in REPRESENTATION_FIELDS
-    }
-    additions: List[tuple[str, str]] = []
-
-    for action in update:
-        if not isinstance(action, dict):
-            raise TypeError(f"TSM action must be a dict, got {type(action).__name__}")
-        if "type" not in action or "content" not in action:
-            raise ValueError("TSM action must contain 'type' and 'content'")
-        action_type = action["type"]
-        if action_type not in action_targets:
-            raise ValueError(f"Unknown TSM action type {action_type!r}")
-
-        field_name, operation = action_targets[action_type]
-        content = action["content"]
-        if operation == "add":
-            if not isinstance(content, str):
-                raise TypeError(f"{action_type} content must be a string")
-            additions.append((field_name, content))
-            continue
-
-        if not isinstance(content, int):
-            raise TypeError(f"{action_type} content must be an integer index")
-        if content < 0 or content >= len(representation[field_name]):
-            raise IndexError(
-                f"{action_type} index {content} is out of range for {field_name}"
-            )
-        if content in removals[field_name]:
+    @model_validator(mode="after")
+    def validate_route(self) -> "TaskStateReactiveInput":
+        if self.call_tsm and self.instruction is None:
+            raise ValueError("call_tsm=true requires an instruction.")
+        if not self.call_tsm and self.instruction is not None:
+            raise ValueError("call_tsm=false does not accept a TSM instruction.")
+        if self.call_tsm and self.environment_feedback:
             raise ValueError(
-                f"{action_type} index {content} is removed more than once"
+                "A TSM instruction and environment feedback cannot share one turn."
             )
-        removals[field_name].append(content)
-
-    for field_name, indices in removals.items():
-        for index in sorted(indices, reverse=True):
-            representation[field_name].pop(index)
-    for field_name, content in additions:
-        representation[field_name].append(content)
-
-    return normalize_representation(representation)
-
-
-def dispatcher_representation(
-    input_representation: Dict[str, Any],
-    representation: Dict[str, Any],
-) -> Dict[str, Any]:
-    result = deepcopy(representation)
-    previous_rules = input_representation.get("rules", [])
-    current_rules = representation["rules"]
-    new_rules = {
-        rule for rule in current_rules
-        if rule not in previous_rules
-    }
-    result["rules"] = [
-        f"[removed] {rule}"
-        for rule in previous_rules
-        if rule not in current_rules
-    ]
-    result["rules"].extend(
-        f"[new] {rule}" if rule in new_rules else rule
-        for rule in current_rules
-    )
-
-    completed_todos = set(representation.get("completed_todos", []))
-    result["todo"] = [
-        f"[done] {todo}" if todo in completed_todos else todo
-        for todo in representation["todo"]
-    ]
-    return result
-
-
-def parse_dispatcher_output(
-    raw_output: Any,
-    todo_count: Optional[int] = None,
-) -> Dict[str, Any]:
-    if isinstance(raw_output, str):
-        raw_output = json.loads(raw_output)
-    if not isinstance(raw_output, dict):
-        raise ValueError("Dispatcher output must be a JSON object")
-
-    has_message = "message" in raw_output
-    has_tools = "tools" in raw_output
-    if has_message and has_tools:
-        raise ValueError("Answer cannot contain both message and tools")
-
-    say = ""
-    message_from_dispatcher = ""
-    calls = []
-    if has_message:
-        message = raw_output["message"]
-        if not isinstance(message, dict):
-            raise ValueError("message must be an object")
-        recipient = message.get("recipient")
-        if recipient not in {"user", "system"}:
-            raise ValueError("message recipient must be 'user' or 'system'")
-        content = message.get("content", "")
-        if not isinstance(content, str):
-            raise ValueError("message content must be a string")
-        if recipient == "user":
-            say = content
-        else:
-            message_from_dispatcher = content
-    elif has_tools:
-        if not isinstance(raw_output["tools"], list):
-            raise ValueError("tools must be a list")
-        robots = set()
-        for call in raw_output["tools"]:
-            if not isinstance(call, dict):
-                raise ValueError("Tool call must be an object")
-            robot = call.get("robot")
-            name = call.get("name")
-            arguments = call.get("arguments", {})
-            if not isinstance(robot, str) or not robot:
-                raise ValueError("Tool call must define a non-empty robot")
-            if robot in robots:
-                raise ValueError(f"Multiple calls for the same robot ({robot})")
-            if not isinstance(name, str) or not name:
-                raise ValueError(f"Call for target {robot!r} must define a name")
-            if not isinstance(arguments, dict):
-                raise ValueError(f"Call arguments for target {robot!r} must be an object")
-            robots.add(robot)
-            calls.append(
-                {"robot": robot, "name": name, "arguments": arguments}
-            )
-
-    completed_todo = raw_output.get("completed_todos", [])
-    if not isinstance(completed_todo, list):
-        raise ValueError("completed_todos must be a list")
-    completed_todo_ids = []
-    for raw_todo_id in completed_todo:
-        try:
-            todo_id = int(raw_todo_id)
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                f"completed_todos contains a non-integer id: {raw_todo_id!r}"
-            ) from error
-        if todo_count is not None and not 0 <= todo_id < todo_count:
-            raise ValueError(
-                f"completed todo id {todo_id} is outside the todo list"
-            )
-        completed_todo_ids.append(str(todo_id))
-    return {
-        "say": say,
-        "calls": calls,
-        "message_from_dispatcher": message_from_dispatcher,
-        "completed_todo": completed_todo_ids,
-        "raw_output": raw_output,
-    }
+        if any(not rule for rule in self.persistent_rules):
+            raise ValueError("Persistent rules must be non-empty strings.")
+        if any(not message for message in self.environment_feedback):
+            raise ValueError("Environment feedback must be non-empty strings.")
+        return self
 
 
 class TaskStateReactiveAgent(BaseAgent):
+    """Orchestrate TSR models while delegating state semantics to the core."""
+
     def __init__(
         self,
         name: str,
@@ -249,358 +95,393 @@ class TaskStateReactiveAgent(BaseAgent):
             TaskStateReactiveInput.model_validate(entry.input)
             for entry in request.inputs
         ]
-        modes = {item.inference_mode for item in parsed_inputs}
-        if len(modes) > 1:
+        inference_modes = {item.inference_mode for item in parsed_inputs}
+        if len(inference_modes) > 1:
             raise ValueError(
-                "All inputs in a batch must use the same inference mode."
+                "All inputs in one batch must use the same inference mode."
             )
-        inference_mode = modes.pop() if modes else False
+        inference_mode = inference_modes.pop() if inference_modes else False
 
-        state_candidates: list[Dict[str, Any]] = []
-        tsm_sources = []
-        tsm_permanent_rules = []
-        tsm_goals = []
-        tsm_rules = []
-        tsm_todo = []
-        tsm_instructions = []
+        state_candidates: list[dict[str, Any]] = []
+        tsm_pending: list[dict[str, Any]] = []
+        tsm_messages: dict[str, list[Any]] = {
+            "permanent_rules": [],
+            "rules": [],
+            "goals": [],
+            "instruction": [],
+        }
 
         for input_index, (entry, agent_input) in enumerate(
             zip(request.inputs, parsed_inputs)
         ):
-            input_representation = normalize_representation(agent_input.memory)
-            completed_todos = list(
-                input_representation.get("completed_todos", [])
+            state = ReactiveTaskState.from_dict(agent_input.task_state)
+            state_before = state.to_dict()
+            history = normalize_dispatcher_history(
+                agent_input.dispatcher_history
             )
-            for raw_todo_id in agent_input.completed_todos:
-                try:
-                    todo_id = int(raw_todo_id)
-                except (TypeError, ValueError):
-                    continue
-                if 0 <= todo_id < len(input_representation["todo"]):
-                    todo = input_representation["todo"][todo_id]
-                    if todo.startswith("[done] "):
-                        todo = todo.removeprefix("[done] ")
-                        input_representation["todo"][todo_id] = todo
-                    if todo not in completed_todos:
-                        completed_todos.append(todo)
-            input_representation["completed_todos"] = completed_todos
-
-            if agent_input.tsm is not None:
-                supplied_state = agent_input.tsm
-                state_candidates.append(
-                    {
-                        "input_index": input_index,
-                        "source_id": entry.id,
-                        "state_index": 0,
-                        "input_representation": normalize_representation(
-                            supplied_state["input_representation"]
-                        ),
-                        "representation": normalize_representation(
-                            supplied_state["representation"]
-                        ),
-                        "called": bool(supplied_state.get("called", False)),
-                        "raw_output": supplied_state.get("raw_output"),
-                    }
-                )
-                continue
-
-            if agent_input.instruction.type == "tool_result":
-                representation = deepcopy(input_representation)
-                state_candidates.append(
-                    {
-                        "input_index": input_index,
-                        "source_id": entry.id,
-                        "state_index": 0,
-                        "input_representation": input_representation,
-                        "representation": representation,
+            if not agent_input.call_tsm:
+                state_candidates.append({
+                    "input_index": input_index,
+                    "source_id": entry.id,
+                    "state_index": 0,
+                    "state_before": state_before,
+                    "state": state,
+                    "history": history,
+                    "tsm": {
                         "called": False,
+                        "view": None,
                         "raw_output": None,
-                    }
-                )
+                        "actions": [],
+                    },
+                })
                 continue
 
+            view = state.tsm_view()
+            rendered = render_tsm_view(view.representation)
+            instruction = agent_input.instruction
+            if instruction is None:
+                raise RuntimeError("Validated TSM input lost its instruction.")
             for state_index in range(request.candidate_counts["tsm"]):
-                tsm_sources.append(
-                    (
-                        input_index,
-                        entry.id,
-                        state_index,
-                        deepcopy(input_representation),
-                    )
+                tsm_pending.append({
+                    "input_index": input_index,
+                    "source_id": entry.id,
+                    "state_index": state_index,
+                    "state_before": state_before,
+                    "state": state,
+                    "history": history,
+                    "view": view,
+                    "instruction": instruction,
+                })
+                tsm_messages["permanent_rules"].append(
+                    agent_input.persistent_rules.copy()
                 )
-                permanent_rules = input_representation.get("memory_list", [])
-                if permanent_rules is None:
-                    permanent_rules = []
-                if not isinstance(permanent_rules, list):
-                    raise TypeError("memory['memory_list'] must be a list")
-                if any(not isinstance(rule, str) for rule in permanent_rules):
-                    raise TypeError(
-                        "memory['memory_list'] must contain only strings"
-                    )
-                tsm_permanent_rules.append(permanent_rules.copy())
-                goals = [
-                    f"[completed] {goal}"
-                    for goal in agent_input.completed_goals
-                ]
-                goals.extend(
-                    f"[current] {goal}" if index == 0 else goal
-                    for index, goal in enumerate(
-                        input_representation["goals"]
-                    )
+                tsm_messages["rules"].append(list(rendered.rules))
+                tsm_messages["goals"].append(list(rendered.goals))
+                tsm_messages["instruction"].append(
+                    instruction.content
                 )
-                tsm_goals.append(goals)
-                tsm_rules.append(input_representation["rules"].copy())
-                tsm_todo.append([
-                    f"[done] {todo}"
-                    if todo in completed_todos
-                    else todo
-                    for todo in input_representation["todo"]
-                ])
-                tsm_instructions.append(agent_input.instruction.content)
 
-        if tsm_sources:
-            raw_updates = await model_call(
+        invalid_results: list[tuple[int, int, int, int, dict[str, Any], bool]] = []
+        if tsm_pending:
+            raw_tsm_outputs = await model_call(
                 self.tsm,
-                BatchedMessageTSM(
-                    permanent_rules=tsm_permanent_rules,
-                    goals=tsm_goals,
-                    rules=tsm_rules,
-                    todo=tsm_todo,
-                    instruction=tsm_instructions,
-                ),
+                BatchedMessageTSM(**tsm_messages),
                 inference_mode,
             )
-            if len(raw_updates) != len(tsm_sources):
+            if len(raw_tsm_outputs) != len(tsm_pending):
                 raise ValueError(
-                    f"TSM returned {len(raw_updates)} output(s) for "
-                    f"{len(tsm_sources)} candidate(s)."
+                    f"TSM returned {len(raw_tsm_outputs)} output(s) for "
+                    f"{len(tsm_pending)} candidate(s)."
                 )
-            tsm_validities = []
-            for source, raw_update in zip(tsm_sources, raw_updates):
-                (
-                    input_index,
-                    source_id,
-                    state_index,
-                    input_representation,
-                ) = source
+            tsm_validities: list[bool] = []
+            for pending, raw_output in zip(tsm_pending, raw_tsm_outputs):
+                view = pending["view"]
                 try:
-                    representation = apply_task_state_update(
-                        input_representation,
-                        raw_update,
-                    )
-                    representation["completed_todos"] = [
-                        todo
-                        for todo in input_representation.get(
-                            "completed_todos",
-                            [],
-                        )
-                        if todo in representation["todo"]
-                    ]
-                    error = None
-                    tsm_validities.append(True)
-                except (TypeError, ValueError, IndexError) as exception:
-                    representation = input_representation
-                    error = str(exception)
-                    tsm_validities.append(False)
-                state_candidates.append(
-                    {
-                        "input_index": input_index,
-                        "source_id": source_id,
-                        "state_index": state_index,
-                        "input_representation": input_representation,
-                        "representation": representation,
+                    if not isinstance(raw_output, str):
+                        raise TypeError("TSM model output must be raw text.")
+                    actions = load_tsm_actions_text(raw_output, view)
+                    updated_state = pending["state"].apply_updates(actions)
+                    instruction = pending["instruction"]
+                    tsm_record = {
                         "called": True,
-                        "raw_output": raw_update,
-                        "error": error,
+                        "instruction": {
+                            "role": instruction.role,
+                            "content": instruction.content,
+                        },
+                        "view": deepcopy(view.representation),
+                        "raw_output": raw_output,
+                        "actions": dump_tsm_actions(actions, view),
                     }
-                )
-            self.tsm.update_prompt_log_validity(tsm_validities)
-
-        pending_dispatcher = []
-        invalid_results = []
-        dispatcher_memory = []
-        dispatcher_attributes = []
-        dispatcher_history = []
-        dispatcher_functions = []
-
-        for state in state_candidates:
-            agent_input = parsed_inputs[state["input_index"]]
-            completed_goals = list(agent_input.completed_goals)
-            for goal in state["input_representation"]["goals"]:
-                if (
-                    goal not in state["representation"]["goals"]
-                    and goal not in completed_goals
-                ):
-                    completed_goals.append(goal)
-            state["completed_goals"] = completed_goals
-
-            if state.get("error") is not None:
-                invalid_results.append(
-                    (
-                        state["input_index"],
-                        state["state_index"],
-                        -1,
-                        state["source_id"],
-                        {
-                            "tsm": {
-                                "input_representation": state["input_representation"],
-                                "representation": state["representation"],
-                                "called": state["called"],
-                                "raw_output": state["raw_output"],
-                                "format_error": state["error"],
-                            },
-                            "error": {
-                                "component": "tsm",
-                                "reason": state["error"],
-                                "raw_output": state["raw_output"],
-                            },
-                            "completed_goals": completed_goals,
+                    state_candidates.append({
+                        **pending,
+                        "state": updated_state,
+                        "tsm": tsm_record,
+                    })
+                    tsm_validities.append(True)
+                except (TypeError, ValueError, IndexError) as error:
+                    tsm_validities.append(False)
+                    output = self._error_output(
+                        state_before=pending["state_before"],
+                        state_after_tsm=pending["state_before"],
+                        history=pending["history"],
+                        component="tsm",
+                        reason=str(error),
+                        raw_output=raw_output,
+                        tsm={
+                            "called": True,
+                            "view": deepcopy(view.representation),
+                            "raw_output": raw_output,
+                            "actions": None,
+                            "error": str(error),
                         },
                     )
-                )
+                    invalid_results.append((
+                        pending["input_index"],
+                        pending["state_index"],
+                        -1,
+                        pending["source_id"],
+                        output,
+                        False,
+                    ))
+            self.tsm.update_prompt_log_validity(tsm_validities)
+
+        dispatcher_pending: list[dict[str, Any]] = []
+        dispatcher_messages: dict[str, list[Any]] = {
+            "mode": [],
+            "permanent_rules": [],
+            "rules": [],
+            "goals": [],
+            "attributes": [],
+            "history": [],
+            "tools": [],
+        }
+        idle_results: list[tuple[int, int, int, int, dict[str, Any], bool]] = []
+
+        for candidate in state_candidates:
+            agent_input = parsed_inputs[candidate["input_index"]]
+            history = append_environment_feedback(
+                candidate["history"],
+                agent_input.environment_feedback,
+            )
+            preparation = prepare_dispatcher_turn(candidate["state"])
+            if preparation.mode is DispatcherMode.IDLE:
+                final_state = candidate["state"].to_dict()
+                idle_results.append((
+                    candidate["input_index"],
+                    candidate["state_index"],
+                    0,
+                    candidate["source_id"],
+                    {
+                        "task_state": {
+                            "before": candidate["state_before"],
+                            "after_tsm": final_state,
+                            "final": final_state,
+                        },
+                        "tsm": candidate["tsm"],
+                        "dispatcher": {
+                            "called": False,
+                            "mode": "idle",
+                            "view": None,
+                            "raw_output": None,
+                            "output": None,
+                        },
+                        "dispatcher_history": history,
+                    },
+                    True,
+                ))
                 continue
 
+            if preparation.view is None:
+                raise RuntimeError("Non-idle Dispatcher mode lost its view.")
+            rendered = render_dispatcher_view(
+                preparation.view.representation
+            )
             for dispatcher_index in range(
                 request.candidate_counts["dispatcher"]
             ):
-                pending_dispatcher.append((state, dispatcher_index))
-                dispatcher_memory.append(
-                    dispatcher_representation(
-                        state["input_representation"],
-                        state["representation"],
-                    )
+                dispatcher_pending.append({
+                    **candidate,
+                    "dispatcher_index": dispatcher_index,
+                    "history": history,
+                    "preparation": preparation,
+                })
+                dispatcher_messages["mode"].append(preparation.mode.value)
+                dispatcher_messages["permanent_rules"].append(
+                    agent_input.persistent_rules.copy()
                 )
-                dispatcher_attributes.append(agent_input.attributes.copy())
-                dispatcher_functions.append(agent_input.function.copy())
-                history = deepcopy(agent_input.history)
-                if agent_input.instruction.type == "tool_result":
-                    feedback_content = agent_input.instruction.content
-                    try:
-                        feedback = json.loads(feedback_content)
-                    except json.JSONDecodeError:
-                        feedback = feedback_content
+                dispatcher_messages["rules"].append(list(rendered.rules))
+                dispatcher_messages["goals"].append(list(rendered.goals))
+                dispatcher_messages["attributes"].append(
+                    deepcopy(agent_input.attributes)
+                )
+                dispatcher_messages["history"].append(
+                    render_dispatcher_history(history)
+                )
+                dispatcher_messages["tools"].append(
+                    deepcopy(agent_input.tools)
+                )
 
-                    if isinstance(feedback, dict):
-                        feedback.pop("previous_tool_call", None)
-                        feedback_content = json.dumps(
-                            feedback,
-                            ensure_ascii=False,
-                        )
-
-                    history.append({
-                        "author": "SYSTEM",
-                        "content": feedback_content,
-                        "timestamp": 0,
-                    })
-                dispatcher_history.append(history)
-
-        raw_dispatcher_outputs = []
-        if pending_dispatcher:
+        raw_dispatcher_outputs: list[Any] = []
+        if dispatcher_pending:
             raw_dispatcher_outputs = await model_call(
                 self.dispatcher,
-                BatchedMessageDispatcher(
-                    memory=dispatcher_memory,
-                    attributes=dispatcher_attributes,
-                    history=dispatcher_history,
-                    function=dispatcher_functions,
-                ),
+                BatchedMessageDispatcher(**dispatcher_messages),
                 inference_mode,
             )
-            if len(raw_dispatcher_outputs) != len(pending_dispatcher):
+            if len(raw_dispatcher_outputs) != len(dispatcher_pending):
                 raise ValueError(
-                    f"Dispatcher returned {len(raw_dispatcher_outputs)} output(s) "
-                    f"for {len(pending_dispatcher)} candidate(s)."
+                    f"Dispatcher returned {len(raw_dispatcher_outputs)} "
+                    f"output(s) for {len(dispatcher_pending)} candidate(s)."
                 )
 
-        results = invalid_results
-        dispatcher_validities = []
+        results = [*invalid_results, *idle_results]
+        dispatcher_validities: list[bool] = []
         for pending, raw_output in zip(
-            pending_dispatcher,
+            dispatcher_pending,
             raw_dispatcher_outputs,
         ):
-            state, dispatcher_index = pending
-            task_state = {
-                "input_representation": state["input_representation"],
-                "representation": state["representation"],
-                "called": state["called"],
-                "raw_output": state["raw_output"],
-            }
+            preparation = pending["preparation"]
             try:
-                dispatcher = parse_dispatcher_output(
+                normalized_output = self._normalize_dispatcher_output(
                     raw_output,
-                    len(task_state["representation"]["todo"]),
+                    preparation.mode,
                 )
-                output = {
-                    "tsm": task_state,
-                    "dispatcher": dispatcher["raw_output"],
-                    "completed_goals": state["completed_goals"],
+                final_state = finalize_dispatcher_turn(
+                    pending["state"],
+                    preparation,
+                    normalized_output["completed_todos"],
+                )
+                if preparation.mode is DispatcherMode.EXECUTION_REPORT:
+                    final_history: list[dict[str, Any]] = []
+                elif "tools" in normalized_output:
+                    final_history = append_dispatcher_tool_calls(
+                        pending["history"],
+                        normalized_output["tools"],
+                    )
+                else:
+                    final_history = deepcopy(pending["history"])
+                result_output = {
+                    "task_state": {
+                        "before": pending["state_before"],
+                        "after_tsm": pending["state"].to_dict(),
+                        "final": final_state.to_dict(),
+                    },
+                    "tsm": pending["tsm"],
+                    "dispatcher": {
+                        "called": True,
+                        "mode": preparation.mode.value,
+                        "view": deepcopy(preparation.view.representation),
+                        "raw_output": deepcopy(raw_output),
+                        "output": normalized_output,
+                    },
+                    "dispatcher_history": final_history,
                 }
                 valid = True
                 dispatcher_validities.append(True)
-            except (TypeError, ValueError, json.JSONDecodeError) as error:
+            except (TypeError, ValueError, IndexError) as error:
+                result_output = self._error_output(
+                    state_before=pending["state_before"],
+                    state_after_tsm=pending["state"].to_dict(),
+                    history=pending["history"],
+                    component="dispatcher",
+                    reason=str(error),
+                    raw_output=raw_output,
+                    tsm=pending["tsm"],
+                    dispatcher={
+                        "called": True,
+                        "mode": preparation.mode.value,
+                        "view": deepcopy(preparation.view.representation),
+                        "raw_output": deepcopy(raw_output),
+                        "output": None,
+                        "error": str(error),
+                    },
+                )
                 valid = False
                 dispatcher_validities.append(False)
-                output = {
-                    "tsm": task_state,
-                    "dispatcher": raw_output,
-                    "error": {
-                        "component": "dispatcher",
-                        "reason": str(error),
-                        "raw_output": raw_output,
-                    },
-                    "completed_goals": state["completed_goals"],
-                }
-            results.append(
-                (
-                    state["input_index"],
-                    state["state_index"],
-                    dispatcher_index,
-                    state["source_id"],
-                    output,
-                    valid,
-                )
-            )
-        self.dispatcher.update_prompt_log_validity(
-            dispatcher_validities
-        )
+            results.append((
+                pending["input_index"],
+                pending["state_index"],
+                pending["dispatcher_index"],
+                pending["source_id"],
+                result_output,
+                valid,
+            ))
+        self.dispatcher.update_prompt_log_validity(dispatcher_validities)
 
-        normalized_results = []
-        for result in results:
-            if len(result) == 5:
-                input_index, state_index, dispatcher_index, source_id, output = result
-                valid = False
-            else:
-                (
-                    input_index,
-                    state_index,
-                    dispatcher_index,
-                    source_id,
-                    output,
-                    valid,
-                ) = result
-            normalized_results.append(
-                (
-                    input_index,
-                    state_index,
-                    dispatcher_index,
-                    source_id,
-                    output,
-                    valid,
-                )
-            )
-
-        normalized_results.sort(key=lambda item: item[:3])
-        candidate_indices: Dict[int, int] = {}
-        outputs = []
-        for _, _, _, source_id, output, valid in normalized_results:
+        results.sort(key=lambda item: item[:3])
+        candidate_indices: dict[int, int] = {}
+        agent_outputs: list[AgentOutput] = []
+        for _, _, _, source_id, output, valid in results:
             candidate_index = candidate_indices.get(source_id, 0)
             candidate_indices[source_id] = candidate_index + 1
-            outputs.append(
-                AgentOutput(
-                    source_id=source_id,
-                    candidate_index=candidate_index,
-                    valid=valid,
-                    output=output,
+            agent_outputs.append(AgentOutput(
+                source_id=source_id,
+                candidate_index=candidate_index,
+                valid=valid,
+                output=output,
+            ))
+        return agent_outputs
+
+    @staticmethod
+    def _normalize_dispatcher_output(
+        raw_output: Any,
+        mode: DispatcherMode,
+    ) -> dict[str, Any]:
+        if not isinstance(raw_output, dict):
+            raise ValueError("Dispatcher output must be a parsed JSON object.")
+        allowed = {"message", "tools", "completed_todos"}
+        if set(raw_output) - allowed:
+            raise ValueError("Dispatcher output contains unsupported fields.")
+        if "message" in raw_output and "tools" in raw_output:
+            raise ValueError("Dispatcher output cannot mix message and tools.")
+        if "message" not in raw_output and "tools" not in raw_output:
+            raise ValueError("Dispatcher output requires message or tools.")
+
+        completed = raw_output.get("completed_todos", [])
+        if not isinstance(completed, list) or not all(
+            isinstance(label, str) for label in completed
+        ):
+            raise TypeError("completed_todos must contain tN labels.")
+
+        output: dict[str, Any] = {"completed_todos": completed.copy()}
+        if "message" in raw_output:
+            message = raw_output["message"]
+            if not isinstance(message, dict) or set(message) != {
+                "recipient",
+                "content",
+            }:
+                raise ValueError(
+                    "Dispatcher messages require recipient and content."
                 )
-            )
-        return outputs
+            if message.get("recipient") not in {"user", "tsm"}:
+                raise ValueError("Message recipient must be user or tsm.")
+            if not isinstance(message.get("content"), str) or not message["content"]:
+                raise ValueError("Message content must be a non-empty string.")
+            output["message"] = deepcopy(message)
+        else:
+            tools = raw_output["tools"]
+            if not isinstance(tools, list):
+                raise TypeError("Dispatcher tools must be a list.")
+            append_dispatcher_tool_calls([], tools)
+            output["tools"] = deepcopy(tools)
+
+        if mode is DispatcherMode.EXECUTION_REPORT:
+            if "message" not in output or output["message"]["recipient"] != "user":
+                raise ValueError("An execution report requires a user message.")
+            if output["completed_todos"]:
+                raise ValueError("An execution report cannot complete todos.")
+        return output
+
+    @staticmethod
+    def _error_output(
+        *,
+        state_before: dict[str, Any],
+        state_after_tsm: dict[str, Any],
+        history: list[dict[str, Any]],
+        component: Literal["tsm", "dispatcher"],
+        reason: str,
+        raw_output: Any,
+        tsm: dict[str, Any],
+        dispatcher: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "task_state": {
+                "before": deepcopy(state_before),
+                "after_tsm": deepcopy(state_after_tsm),
+                "final": deepcopy(state_after_tsm),
+            },
+            "tsm": deepcopy(tsm),
+            "dispatcher": dispatcher or {
+                "called": False,
+                "mode": None,
+                "view": None,
+                "raw_output": None,
+                "output": None,
+            },
+            "dispatcher_history": deepcopy(history),
+            "error": {
+                "component": component,
+                "reason": reason,
+                "raw_output": deepcopy(raw_output),
+            },
+        }
