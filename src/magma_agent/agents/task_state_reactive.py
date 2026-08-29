@@ -3,16 +3,17 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
-
 from magma_core.protocol.agent import AgentOutput, AgentRequest
+from magma_core.protocol.tsr import (
+    TaskStateReactiveInput,
+    TaskStateReactiveResult,
+)
 from magma_core.tsr_engine import (
     DispatcherMode,
     ReactiveTaskState,
-    append_dispatcher_tool_calls,
     append_environment_feedback,
+    apply_dispatcher_output,
     dump_tsm_actions,
-    finalize_dispatcher_turn,
     load_tsm_actions_text,
     normalize_dispatcher_history,
     prepare_dispatcher_turn,
@@ -28,39 +29,6 @@ from magma_agent.models import (
 )
 
 from .base import BaseAgent, ModelCall
-
-
-class TsmInstruction(BaseModel):
-    role: Literal["user", "system"]
-    content: str
-
-
-class TaskStateReactiveInput(BaseModel):
-    task_state: dict[str, Any]
-    call_tsm: bool
-    instruction: TsmInstruction | None = None
-    environment_feedback: list[str] = Field(default_factory=list)
-    persistent_rules: list[str] = Field(default_factory=list)
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    dispatcher_history: list[dict[str, Any]] = Field(default_factory=list)
-    tools: list[dict[str, Any]] = Field(default_factory=list)
-    inference_mode: bool = False
-
-    @model_validator(mode="after")
-    def validate_route(self) -> "TaskStateReactiveInput":
-        if self.call_tsm and self.instruction is None:
-            raise ValueError("call_tsm=true requires an instruction.")
-        if not self.call_tsm and self.instruction is not None:
-            raise ValueError("call_tsm=false does not accept a TSM instruction.")
-        if self.call_tsm and self.environment_feedback:
-            raise ValueError(
-                "A TSM instruction and environment feedback cannot share one turn."
-            )
-        if any(not rule for rule in self.persistent_rules):
-            raise ValueError("Persistent rules must be non-empty strings.")
-        if any(not message for message in self.environment_feedback):
-            raise ValueError("Environment feedback must be non-empty strings.")
-        return self
 
 
 class TaskStateReactiveAgent(BaseAgent):
@@ -209,6 +177,10 @@ class TaskStateReactiveAgent(BaseAgent):
                         raw_output=raw_output,
                         tsm={
                             "called": True,
+                            "instruction": {
+                                "role": pending["instruction"].role,
+                                "content": pending["instruction"].content,
+                            },
                             "view": deepcopy(view.representation),
                             "raw_output": raw_output,
                             "actions": None,
@@ -262,6 +234,7 @@ class TaskStateReactiveAgent(BaseAgent):
                             "called": False,
                             "mode": "idle",
                             "view": None,
+                            "input_history": history,
                             "raw_output": None,
                             "output": None,
                         },
@@ -322,39 +295,28 @@ class TaskStateReactiveAgent(BaseAgent):
         ):
             preparation = pending["preparation"]
             try:
-                normalized_output = self._normalize_dispatcher_output(
-                    raw_output,
-                    preparation.mode,
-                )
-                final_state = finalize_dispatcher_turn(
+                application = apply_dispatcher_output(
                     pending["state"],
                     preparation,
-                    normalized_output["completed_todos"],
+                    pending["history"],
+                    raw_output,
                 )
-                if preparation.mode is DispatcherMode.EXECUTION_REPORT:
-                    final_history: list[dict[str, Any]] = []
-                elif "tools" in normalized_output:
-                    final_history = append_dispatcher_tool_calls(
-                        pending["history"],
-                        normalized_output["tools"],
-                    )
-                else:
-                    final_history = deepcopy(pending["history"])
                 result_output = {
                     "task_state": {
                         "before": pending["state_before"],
                         "after_tsm": pending["state"].to_dict(),
-                        "final": final_state.to_dict(),
+                        "final": application.task_state.to_dict(),
                     },
                     "tsm": pending["tsm"],
                     "dispatcher": {
                         "called": True,
                         "mode": preparation.mode.value,
                         "view": deepcopy(preparation.view.representation),
+                        "input_history": deepcopy(pending["history"]),
                         "raw_output": deepcopy(raw_output),
-                        "output": normalized_output,
+                        "output": application.output,
                     },
-                    "dispatcher_history": final_history,
+                    "dispatcher_history": application.history,
                 }
                 valid = True
                 dispatcher_validities.append(True)
@@ -371,6 +333,7 @@ class TaskStateReactiveAgent(BaseAgent):
                         "called": True,
                         "mode": preparation.mode.value,
                         "view": deepcopy(preparation.view.representation),
+                        "input_history": deepcopy(pending["history"]),
                         "raw_output": deepcopy(raw_output),
                         "output": None,
                         "error": str(error),
@@ -394,63 +357,14 @@ class TaskStateReactiveAgent(BaseAgent):
         for _, _, _, source_id, output, valid in results:
             candidate_index = candidate_indices.get(source_id, 0)
             candidate_indices[source_id] = candidate_index + 1
+            validated_output = TaskStateReactiveResult.model_validate(output)
             agent_outputs.append(AgentOutput(
                 source_id=source_id,
                 candidate_index=candidate_index,
                 valid=valid,
-                output=output,
+                output=validated_output.model_dump(mode="python"),
             ))
         return agent_outputs
-
-    @staticmethod
-    def _normalize_dispatcher_output(
-        raw_output: Any,
-        mode: DispatcherMode,
-    ) -> dict[str, Any]:
-        if not isinstance(raw_output, dict):
-            raise ValueError("Dispatcher output must be a parsed JSON object.")
-        allowed = {"message", "tools", "completed_todos"}
-        if set(raw_output) - allowed:
-            raise ValueError("Dispatcher output contains unsupported fields.")
-        if "message" in raw_output and "tools" in raw_output:
-            raise ValueError("Dispatcher output cannot mix message and tools.")
-        if "message" not in raw_output and "tools" not in raw_output:
-            raise ValueError("Dispatcher output requires message or tools.")
-
-        completed = raw_output.get("completed_todos", [])
-        if not isinstance(completed, list) or not all(
-            isinstance(label, str) for label in completed
-        ):
-            raise TypeError("completed_todos must contain tN labels.")
-
-        output: dict[str, Any] = {"completed_todos": completed.copy()}
-        if "message" in raw_output:
-            message = raw_output["message"]
-            if not isinstance(message, dict) or set(message) != {
-                "recipient",
-                "content",
-            }:
-                raise ValueError(
-                    "Dispatcher messages require recipient and content."
-                )
-            if message.get("recipient") not in {"user", "tsm"}:
-                raise ValueError("Message recipient must be user or tsm.")
-            if not isinstance(message.get("content"), str) or not message["content"]:
-                raise ValueError("Message content must be a non-empty string.")
-            output["message"] = deepcopy(message)
-        else:
-            tools = raw_output["tools"]
-            if not isinstance(tools, list):
-                raise TypeError("Dispatcher tools must be a list.")
-            append_dispatcher_tool_calls([], tools)
-            output["tools"] = deepcopy(tools)
-
-        if mode is DispatcherMode.EXECUTION_REPORT:
-            if "message" not in output or output["message"]["recipient"] != "user":
-                raise ValueError("An execution report requires a user message.")
-            if output["completed_todos"]:
-                raise ValueError("An execution report cannot complete todos.")
-        return output
 
     @staticmethod
     def _error_output(
@@ -475,6 +389,7 @@ class TaskStateReactiveAgent(BaseAgent):
                 "called": False,
                 "mode": None,
                 "view": None,
+                "input_history": deepcopy(history),
                 "raw_output": None,
                 "output": None,
             },
