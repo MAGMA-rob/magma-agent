@@ -15,14 +15,26 @@ or:
 <completed>[]</completed>
 
 or:
+<completed>["t0"]</completed>
+
+or:
 <noop>
 
 Output one or more <tool_call> blocks followed by exactly one <completed> block,
-or one <message> block followed by exactly one <completed> block.
+one <message> block followed by exactly one <completed> block,
+or one non-empty <completed> block.
 At most one tool call per robot.
 Message recipients: "user" or "tsm".
 Use only <noop> if no tool, message, or completed todo must be produced.
 Output nothing else.
+
+{% if tools %}
+<tools>
+{% for func in tools %}
+{{ func | tojson }}
+{% endfor %}
+</tools>
+{% endif %}
 {% endif %}
 
 {% if mode == "execution_report" %}
@@ -33,16 +45,10 @@ Use this syntax:
 </message>
 {% endif %}
 
-{% if tools %}
-<tools>
-{% for func in tools %}
-{{ func | tojson }}
-{% endfor %}
-</tools>
-{% endif %}
 <|im_end|>
 
 <|im_start|>user
+{% if mode == "execution" %}
 History:
 {{ history }}
 
@@ -62,6 +68,7 @@ Rules:
 {% else %}
 empty
 {% endfor %}
+{% endif %}
 
 Goals:
 {% for goal in goals %}

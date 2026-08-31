@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, Union
+from typing import Any, Dict, Literal, Union
 
 
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
@@ -14,20 +14,56 @@ MESSAGE_OUTPUT_RE = re.compile(
     r"<completed>\s*(?P<completed>.*?)\s*</completed>\s*",
     re.DOTALL,
 )
+COMPLETED_OUTPUT_RE = re.compile(
+    r"\s*<completed>\s*(?P<completed>.*?)\s*</completed>\s*",
+    re.DOTALL,
+)
+REPORT_MESSAGE_OUTPUT_RE = re.compile(
+    r"\s*<message>\s*(?P<message>.*?)\s*</message>\s*",
+    re.DOTALL,
+)
 NOOP_OUTPUT_RE = re.compile(r"\s*<noop>\s*")
 
 
-def parse_dispatcher_output(text: str) -> Union[Dict[str, Any], str]:
+def parse_dispatcher_output(
+    text: str,
+    mode: Literal["execution", "execution_report"],
+) -> Union[Dict[str, Any], str]:
+    if mode == "execution_report":
+        report_match = REPORT_MESSAGE_OUTPUT_RE.fullmatch(text)
+        if report_match is None:
+            return text.strip()
+        try:
+            message = json.loads(report_match.group("message"))
+        except json.JSONDecodeError:
+            return text.strip()
+        if not isinstance(message, dict) or set(message) != {
+            "recipient",
+            "content",
+        }:
+            return text.strip()
+        if (
+            message["recipient"] != "user"
+            or not isinstance(message["content"], str)
+        ):
+            return text.strip()
+        return {"message": message, "completed_todos": []}
+
     if NOOP_OUTPUT_RE.fullmatch(text):
         return {"tools": [], "completed_todos": []}
 
     tools_match = TOOLS_OUTPUT_RE.fullmatch(text)
     message_match = MESSAGE_OUTPUT_RE.fullmatch(text)
-    if tools_match is None and message_match is None:
+    completed_match = COMPLETED_OUTPUT_RE.fullmatch(text)
+    if (
+        tools_match is None
+        and message_match is None
+        and completed_match is None
+    ):
         return text.strip()
 
-    match = tools_match if tools_match is not None else message_match
-    if match is None:
+    match = tools_match or message_match or completed_match
+    if match is None:  # Kept explicit for static type narrowing.
         return text.strip()
     try:
         completed_todos = json.loads(match.group("completed"))
@@ -35,6 +71,10 @@ def parse_dispatcher_output(text: str) -> Union[Dict[str, Any], str]:
         return text.strip()
     if not isinstance(completed_todos, list):
         return text.strip()
+    if completed_match is not None:
+        if not completed_todos:
+            return text.strip()
+        return {"tools": [], "completed_todos": completed_todos}
 
     if tools_match is not None:
         calls = []

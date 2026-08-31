@@ -279,7 +279,10 @@ class QwenDispatcher(BaseDispatcher):
                 generated_tokens,
                 skip_special_tokens=True,
             ).strip()
-            parsed_response = parse_dispatcher_output(response_text)
+            parsed_response = parse_dispatcher_output(
+                response_text,
+                mode=message.mode[i],
+            )
             self.log_prompt_exchange(
                 formatted_inputs[i],
                 response_text,
