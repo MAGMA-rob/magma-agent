@@ -1,11 +1,14 @@
 from copy import deepcopy
-from typing import Any, Dict, List
+import json
+from typing import Any, Dict, List, Sequence
 
 from pydantic import field_validator
 
 from magma_core.protocol.agent import AgentOutput, AgentRequest
 
-from magma_agent.clients.commander.base import BaseCommander
+from magma_agent.clients.commander.history import map_chat_role
+from magma_agent.clients.commander.magma_model import MagmaCommander
+from magma_agent.clients.commander.messages import BatchedMessageCommander
 from magma_agent.clients.summarizer.messages import BatchedMessageSummarizer
 from magma_agent.models import BaseModelClient
 
@@ -32,23 +35,92 @@ class HistorySummaryReactiveAgent(HistoryReactiveAgent):
         name: str,
         summarizer: BaseModelClient,
         commander: BaseModelClient,
-        max_context_tokens: int = 5000,
+        max_context_characters: int = 5000,
     ) -> None:
         super().__init__(name, commander)
-        if not isinstance(max_context_tokens, int) or max_context_tokens <= 0:
-            raise ValueError("max_context_tokens must be a positive integer")
-        if not isinstance(commander, BaseCommander) or not hasattr(
-            commander, "count_prompt_tokens"
+        if (
+            not isinstance(max_context_characters, int)
+            or max_context_characters <= 0
         ):
             raise ValueError(
-                "History summary reactive requires a MagmaCommander with prompt counting support."
+                "max_context_characters must be a positive integer"
+            )
+        if not isinstance(commander, MagmaCommander):
+            raise ValueError(
+                "History summary reactive requires a MagmaCommander whose "
+                "weights provide the trained chat template."
+            )
+        if commander.tokenizer.chat_template is None:
+            raise ValueError(
+                "History summary reactive Commander weights must provide "
+                "their trained chat template."
             )
         self.summarizer = summarizer
-        self.max_context_tokens = max_context_tokens
+        self.max_context_characters = max_context_characters
 
     @property
     def models(self) -> list[BaseModelClient]:
         return [self.summarizer, self.commander]
+
+    @staticmethod
+    def _commander_message(
+        inputs: Sequence[HistoryReactiveInput],
+    ) -> BatchedMessageCommander:
+        normalized_inputs = []
+        for agent_input in inputs:
+            normalized_input = agent_input.model_copy(deep=True)
+            normalized_history = []
+            for previous_message in normalized_input.history:
+                message = deepcopy(previous_message)
+                role = map_chat_role(message.get("author"))
+                content = message.get(
+                    "content",
+                    message.get("sentence", ""),
+                )
+                if content is None:
+                    content = ""
+                if not isinstance(content, str):
+                    raise RuntimeError(
+                        f"Get {type(content)} with role {role} : {content}"
+                    )
+
+                if role == "assistant" and "<tool_call>" not in content:
+                    try:
+                        output = json.loads(content)
+                    except json.JSONDecodeError:
+                        output = None
+                    if isinstance(output, dict) and (
+                        {"say", "action"} & output.keys()
+                    ):
+                        say = str(output.get("say", "") or "").strip()
+                        action = output.get("action", {})
+                        if action:
+                            content = (
+                                say
+                                + "<tool_call>"
+                                + json.dumps(action, ensure_ascii=False)
+                                + "</tool_call>"
+                            )
+                        else:
+                            content = say
+                    else:
+                        tool_call_start = content.find("{")
+                        if tool_call_start >= 0:
+                            say = content[:tool_call_start].rstrip()
+                            tool_call = content[tool_call_start:].strip()
+                            content = (
+                                say
+                                + "<tool_call>"
+                                + tool_call
+                                + "</tool_call>"
+                            )
+
+                message["content"] = content
+                normalized_history.append(message)
+            normalized_input.history = normalized_history
+            normalized_inputs.append(normalized_input)
+
+        return HistoryReactiveAgent._commander_message(normalized_inputs)
 
     @staticmethod
     def _invalid_outputs(
@@ -97,7 +169,7 @@ class HistorySummaryReactiveAgent(HistoryReactiveAgent):
             )
         inference_mode = inference_modes.pop() if inference_modes else False
         effective_inputs = [item.model_copy(deep=True) for item in parsed_inputs]
-        prompt_lengths = self.commander.count_prompt_tokens(
+        prompt_lengths = self.commander.count_prompt_characters(
             self._commander_message(effective_inputs)
         )
         summary_updates = []
@@ -113,12 +185,12 @@ class HistorySummaryReactiveAgent(HistoryReactiveAgent):
                 "summary": previous_summary,
             }
             summary_updates.append(summary_update)
-            if prompt_length <= self.max_context_tokens:
+            if prompt_length <= self.max_context_characters:
                 continue
             if not agent_input.history:
                 outputs.extend(self._invalid_outputs(
                     entry.id, candidate_count, "context_budget",
-                    "Commander prompt exceeds max_context_tokens and has no history to summarize.",
+                    "Commander prompt exceeds max_context_characters and has no history to summarize.",
                     summary_update,
                 ))
                 continue
@@ -166,17 +238,17 @@ class HistorySummaryReactiveAgent(HistoryReactiveAgent):
             index for index, entry in enumerate(request.inputs)
             if entry.id not in invalid_source_ids
         ]
-        post_summary_lengths = self.commander.count_prompt_tokens(
+        post_summary_lengths = self.commander.count_prompt_characters(
             self._commander_message([effective_inputs[index] for index in valid_indices])
         ) if valid_indices else []
         accepted_indices = []
         for input_index, prompt_length in zip(valid_indices, post_summary_lengths):
-            if prompt_length <= self.max_context_tokens:
+            if prompt_length <= self.max_context_characters:
                 accepted_indices.append(input_index)
                 continue
             outputs.extend(self._invalid_outputs(
                 request.inputs[input_index].id, candidate_count, "context_budget",
-                "Commander prompt still exceeds max_context_tokens after summarization.",
+                "Commander prompt still exceeds max_context_characters after summarization.",
                 summary_updates[input_index],
             ))
 

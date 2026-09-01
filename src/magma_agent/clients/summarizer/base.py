@@ -1,14 +1,10 @@
-from typing import List
+import json
+from typing import Any, Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from magma_agent.clients.base import BaseModelClient
-from magma_agent.clients.commander.history import (
-    format_history_content,
-    map_chat_role,
-)
-
 from .messages import BatchedMessageSummarizer
 
 
@@ -62,30 +58,76 @@ class MagmaSummarizer(BaseModelClient):
         if not message.history:
             return []
 
-        system_prompt = (
-            "You maintain a compact memory of a long-horizon robotic interaction.\n"
-            "Preserve information that may affect future decisions.\n"
-            "Discard obsolete and irrelevant details.\n"
-            "Return only the updated summary."
-        )
+        system_prompt = """
+You are a context summarization model for a long-horizon robotic agent.
+
+Compress the interaction history into a compact memory that allows another
+agent to continue the mission without access to the discarded context.
+
+Discard redundant dialogue, obsolete information, intermediate reasoning
+that no longer matters, and details that cannot influence future decisions.
+
+When information has been updated or contradicted, retain the latest valid
+information.
+"""
         formatted_inputs = []
         for previous_summary, history in zip(
             message.previous_summary,
             message.history,
         ):
-            interaction = []
+            history_lines = []
             for history_message in history:
-                role = map_chat_role(history_message.get("author"))
-                interaction.append(
-                    f"{role.upper()}:\n"
-                    f"{format_history_content(history_message, role)}"
+                author = str(
+                    history_message.get("author", "UNKNOWN")
+                ).upper()
+                content: Any = history_message.get(
+                    "content",
+                    history_message.get("sentence", ""),
                 )
-            recent_interaction = "\n\n".join(interaction)
+                if isinstance(content, str):
+                    try:
+                        content = json.loads(content)
+                    except json.JSONDecodeError:
+                        pass
+
+                if author == "MODEL" and isinstance(content, dict):
+                    for robot, tool_call in content.items():
+                        if not isinstance(tool_call, dict):
+                            continue
+                        normalized_call: Dict[str, Any] = {
+                            "robot": robot,
+                            "name": tool_call.get("name", ""),
+                            "arguments": tool_call.get("arguments", {}),
+                        }
+                        history_lines.append(
+                            "TOOL: "
+                            + json.dumps(
+                                normalized_call,
+                                ensure_ascii=False,
+                            )
+                        )
+                    continue
+
+                if author == "SYSTEM":
+                    history_lines.append(
+                        "RESULT: "
+                        + json.dumps(content, ensure_ascii=False)
+                    )
+                    continue
+
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False)
+                history_lines.append(f"{author}: {content}")
+
+            formatted_history = (
+                "\n".join(history_lines) if history_lines else "empty"
+            )
+            if previous_summary == "":
+                previous_summary = "None"
             user_prompt = (
-                "Previous summary:\n"
-                f"{previous_summary or 'empty'}\n\n"
-                "Recent interaction:\n"
-                f"{recent_interaction}"
+                f"Previous Summary:\n{previous_summary}\n\n"
+                "Interactions since previous summary:\n"
+                f"{formatted_history}"
             )
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
@@ -94,7 +136,6 @@ class MagmaSummarizer(BaseModelClient):
                         {"role": "user", "content": user_prompt},
                     ],
                     tokenize=False,
-                    add_generation_prompt=True,
                 )
             )
 

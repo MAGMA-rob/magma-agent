@@ -1,0 +1,33 @@
+{
+  "models": [
+    {
+      "name": "hsr_commander",
+      "type": "Commander",
+      "model_id": "models/hsr-commander",
+      "options": {
+        "output_style": "qwen_format"
+      }
+    },
+    {
+      "name": "hsr_summarizer",
+      "type": "Summarizer",
+      "model_id": "models/hsr-summarizer",
+      "options": {
+        "max_new_tokens": 1024
+      }
+    }
+  ],
+  "agents": [
+    {
+      "name": "history_summary_reactive",
+      "type": "history_summary_reactive",
+      "models": {
+        "commander": "hsr_commander",
+        "summarizer": "hsr_summarizer"
+      },
+      "options": {
+        "max_context_characters": 5000
+      }
+    }
+  ]
+}

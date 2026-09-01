@@ -89,12 +89,13 @@ def create_app(settings: Settings) -> FastAPI:
                                 f"Agent {agent_settings.name!r} requires a "
                                 "Commander model."
                             )
-                        max_context_tokens = agent_settings.options.get(
-                            "max_context_tokens",
+                        max_context_characters = agent_settings.options.get(
+                            "max_context_characters",
                             5000,
                         )
                         unsupported_options = sorted(
-                            set(agent_settings.options) - {"max_context_tokens"}
+                            set(agent_settings.options)
+                            - {"max_context_characters"}
                         )
                         if unsupported_options:
                             raise ValueError(
@@ -105,7 +106,7 @@ def create_app(settings: Settings) -> FastAPI:
                             agent_settings.name,
                             summarizer,
                             commander,
-                            max_context_tokens=max_context_tokens,
+                            max_context_characters=max_context_characters,
                         )
                     elif agent_settings.type == "task_state_reactive":
                         tsm = app.state.models[agent_settings.models["tsm"]]
