@@ -238,24 +238,11 @@ class HistorySummaryReactiveAgent(HistoryReactiveAgent):
             index for index, entry in enumerate(request.inputs)
             if entry.id not in invalid_source_ids
         ]
-        post_summary_lengths = self.commander.count_prompt_characters(
-            self._commander_message([effective_inputs[index] for index in valid_indices])
-        ) if valid_indices else []
-        accepted_indices = []
-        for input_index, prompt_length in zip(valid_indices, post_summary_lengths):
-            if prompt_length <= self.max_context_characters:
-                accepted_indices.append(input_index)
-                continue
-            outputs.extend(self._invalid_outputs(
-                request.inputs[input_index].id, candidate_count, "context_budget",
-                "Commander prompt still exceeds max_context_characters after summarization.",
-                summary_updates[input_index],
-            ))
 
         sources = []
         commander_inputs = []
         commander_updates = []
-        for input_index in accepted_indices:
+        for input_index in valid_indices:
             for _ in range(candidate_count):
                 sources.append(request.inputs[input_index].id)
                 commander_inputs.append(effective_inputs[input_index])
