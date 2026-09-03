@@ -3,12 +3,12 @@
     {
       "name": "task_update_tsm",
       "type": "TSM",
-      "model_id": "models/tsm-v0"
+      "model_id": "models/tsm-warm"
     },
     {
       "name": "magma_dispatcher",
       "type": "Dispatcher",
-      "model_id": "models/dispatcher-v0"
+      "model_id": "models/dispatcher-warm"
     }
   ],
   "agents": [
