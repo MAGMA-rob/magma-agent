@@ -29,7 +29,7 @@ class MagmaTSM(TaskStateManager):
         if not batch_size:
             raise ValueError("BatchedMessageTSM must contain at least one instruction.")
 
-        for field_name in ("permanent_rules", "goals", "rules"):
+        for field_name in ("attributes", "permanent_rules", "goals", "rules"):
             field_value = getattr(message, field_name)
             if len(field_value) != batch_size:
                 raise ValueError(
@@ -39,15 +39,10 @@ class MagmaTSM(TaskStateManager):
 
         formatted_inputs = []
         for i in range(batch_size):
-            user_prompt = self._format_task_state(
-                message.permanent_rules[i],
-                message.goals[i],
-                message.rules[i],
-                message.instruction[i],
-            )
             formatted_inputs.append(
                 self.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": user_prompt}],
+                    [{}],
+                    task_attributes=message.attributes[i],
                     permanent_rules=message.permanent_rules[i],
                     rules=message.rules[i],
                     goals=message.goals[i],
@@ -97,32 +92,3 @@ class MagmaTSM(TaskStateManager):
             responses.append(response_text)
 
         return responses
-
-    @staticmethod
-    def _format_task_state(
-        permanent_rules: List[str],
-        goals: List[str],
-        rules: List[str],
-        instruction: str,
-    ) -> str:
-        user_prompt = (
-            "Permanent rules (immutable guidance; never add, remove, or modify):\n"
-        )
-        for rule in permanent_rules:
-            user_prompt += f"- {rule}\n"
-        if not permanent_rules:
-            user_prompt += "empty\n"
-
-        user_prompt += "\nGoals:\n"
-        for goal in goals:
-            user_prompt += f"{goal}\n"
-        if not goals:
-            user_prompt += "empty\n"
-
-        user_prompt += "\nRules:\n"
-        for rule in rules:
-            user_prompt += f"{rule}\n"
-        if not rules:
-            user_prompt += "empty\n"
-
-        return user_prompt + f"\nQuery: {instruction}\n\n"

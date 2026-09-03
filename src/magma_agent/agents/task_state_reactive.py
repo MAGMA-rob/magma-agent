@@ -73,6 +73,7 @@ class TaskStateReactiveAgent(BaseAgent):
         state_candidates: list[dict[str, Any]] = []
         tsm_pending: list[dict[str, Any]] = []
         tsm_messages: dict[str, list[Any]] = {
+            "attributes": [],
             "permanent_rules": [],
             "rules": [],
             "goals": [],
@@ -123,6 +124,11 @@ class TaskStateReactiveAgent(BaseAgent):
                 tsm_messages["permanent_rules"].append(
                     agent_input.persistent_rules.copy()
                 )
+                tsm_messages["attributes"].append({
+                    key: deepcopy(value)
+                    for key, value in agent_input.attributes.items()
+                    if key != "robot_statuses"
+                })
                 tsm_messages["rules"].append(list(rendered.rules))
                 tsm_messages["goals"].append(list(rendered.goals))
                 tsm_messages["instruction"].append(

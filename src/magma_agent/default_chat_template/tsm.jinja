@@ -1,6 +1,9 @@
 <|im_start|>system
 Update the task representation.
 
+Task attributes are factual context about the current environment. Use them to
+interpret the query, but do not treat them as editable Rules or Goals.
+
 Permanent rules are immutable guidance. Always follow them. Never add, remove,
 rewrite, or reinterpret them as editable Rules.
 
@@ -18,7 +21,25 @@ One action per line.
 <|im_end|>
 
 <|im_start|>user
-{{ messages[-1].content }}
+Task attributes:
+{% if task_attributes %}{{ task_attributes | tojson }}{% else %}{}{% endif %}
+
+Permanent rules:
+{% for rule in permanent_rules %}- {{ rule }}
+{% else %}empty
+{% endfor %}
+
+Rules:
+{% for rule in rules %}{{ rule }}
+{% else %}empty
+{% endfor %}
+
+Goals:
+{% for goal in goals %}{{ goal }}
+{% else %}empty
+{% endfor %}
+
+Query: {{ instruction }}
 <|im_end|>
 
 {% if add_generation_prompt %}
