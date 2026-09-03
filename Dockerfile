@@ -16,8 +16,11 @@ RUN apt-get update && \
     gcc \
     curl \
     git \
+    libx11-6 \ 
     bash && \
     rm -rf /var/lib/apt/lists/*
+
+# remove libx11-6 later (sapien)
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 

@@ -4,7 +4,7 @@
     {
       "name": "hsr_commander",
       "type": "Commander",
-      "model_id": "models/hsr-commander",
+      "model_id": "models/hsr-commander-warm",
       "options": {
         "output_style": "qwen_format"
       }
@@ -12,7 +12,7 @@
     {
       "name": "hsr_summarizer",
       "type": "Summarizer",
-      "model_id": "models/hsr-summarizer",
+      "model_id": "models/hsr-summarizer-warm",
       "options": {
         "max_new_tokens": 1024
       }
